@@ -1,0 +1,8 @@
+# The build context needs only the Dockerfile, entrypoint.ps1 and build/modules.
+.git
+.env
+.env.*
+artifacts
+tests
+docs
+*.md

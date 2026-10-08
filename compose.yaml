@@ -1,0 +1,55 @@
+name: claude-agent-dev
+
+include:
+  # service `mitm`; networks `inside` (internal, no route out) and `outside`; volumes `mitm-ca` and `capture`
+  - ../Claude.Agent.Network/compose/sidecar.yaml
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: claude-agent:dev
+    depends_on:
+      mitm:
+        condition: service_healthy
+      ledger:
+        condition: service_started
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # From the shell, else from .env. OAuth token is primary, API key the fallback; both empty means probe
+      # mode, both set and the agent refuses to start. Never written anywhere by the build.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # A convenience so tools find the proxy; the control is that `inside` has no other way out.
+      HTTP_PROXY: http://mitm:8080
+      HTTPS_PROXY: http://mitm:8080
+      http_proxy: http://mitm:8080
+      https_proxy: http://mitm:8080
+      NO_PROXY: localhost,127.0.0.1,mitm
+      no_proxy: localhost,127.0.0.1,mitm
+    networks:
+      - inside
+    volumes:
+      - spool:/spool          # writer side only; the ledger volume and key.bin are never mounted here
+      - mitm-ca:/ca:ro
+    restart: "no"
+
+  ledger:
+    build:
+      context: .
+      dockerfile: ledger.Dockerfile
+    image: claude-agent-ledger:dev
+    # The keeper reads and writes files only; with no network at all the agent cannot reach it.
+    network_mode: none
+    volumes:
+      - spool:/spool
+      - ledger:/ledger
+    stop_grace_period: 15s
+    restart: "no"
+
+volumes:
+  spool: {}
+  ledger: {}
