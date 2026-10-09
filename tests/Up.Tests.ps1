@@ -74,9 +74,9 @@ Describe 'Send-PortalLayer' {
         }
         AfterAll { $listener.Stop() }
 
-        It 'POSTs {name, path} to /api/layers and returns the response' {
+        It 'POSTs {name, path} to /api/layers, path the layers folder, and returns the response' {
             $job = Start-ThreadJob -ScriptBlock $serve -ArgumentList $listener, 201
-            $layer = Join-Path $TestDrive 'x.runs.graph.json'
+            $layer = Join-Path $TestDrive 'artifacts' 'layers'
             $r = Send-PortalLayer -Url "http://127.0.0.1:$port" -Name 'agent-runs' -Path $layer
             $request = $job | Wait-Job -Timeout 20 | Receive-Job
             $r.Posted | Should -BeTrue
@@ -86,6 +86,13 @@ Describe 'Send-PortalLayer' {
             $sent = ($request -split "`r`n`r`n", 2)[1] | ConvertFrom-Json
             $sent.name | Should -BeExactly 'agent-runs'
             $sent.path | Should -BeExactly ([IO.Path]::GetFullPath($layer))
+            $sent.path | Should -Not -Match '\.graph\.json$'
+        }
+
+        It 'is called by Up with the layers folder, not the timestamped file' {
+            $build = Get-Content -LiteralPath (Join-Path $root '.build.ps1') -Raw
+            $build | Should -Match 'Send-PortalLayer -Url \$PortalUrl -Name \$PortalLayerName -Path \$layersDir\s'
+            $build | Should -Not -Match 'Send-PortalLayer[^\r\n]*-Path \$layerFile'
         }
 
         It 'throws when the portal answers and refuses the layer' {

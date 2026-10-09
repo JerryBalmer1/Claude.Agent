@@ -50,8 +50,8 @@ function Test-PortListening {
     finally { $client.Dispose() }
 }
 
-# POST /api/layers on the portal with the layer's path, as Portal's Mount-PortalLayer -Path does, so the portal
-# reads the envelope and the ontology.yaml beside it. Returns { Posted; Url; Warning; Response }. A portal that is
+# POST /api/layers on the portal with a path, as Portal's Mount-PortalLayer -Path does: Up passes the layers folder,
+# whose newest *.graph.json Portal mounts, reading the ontology.yaml beside it. Returns { Posted; Url; Warning; Response }. A portal that is
 # not listening is a warning, never an error; a portal that answers and refuses the layer throws.
 function Send-PortalLayer {
     param(

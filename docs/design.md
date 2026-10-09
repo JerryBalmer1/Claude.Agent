@@ -159,10 +159,13 @@ join is left to the portal, which mounts both layers. The envelope's `version` i
 
 A run should be visible when Up finishes, not after the whole chain. So Up ends by exporting the ledger with
 Graph.Emitter.Agent's `Export-AgentRunGraph` (`-Strict`, so an error finding such as a broken chain or a denied
-call that ran fails Up) into `artifacts/layers/<stamp>.runs.graph.json`, posting that file's path to Portal's
+call that ran fails Up) into `artifacts/layers/<stamp>.runs.graph.json`, posting the folder `artifacts/layers` (made absolute) to Portal's
 `POST /api/layers` on `http://127.0.0.1:8200` as layer `agent-runs`, and printing one line,
 `agent run <stamp> at http://127.0.0.1:8200/ (<n> nodes, <m> edges)`. The layer is posted by path, not as a body,
-because Portal resolves the envelope's relative `ontology.yaml` only beside a file. A portal that is not listening
+because Portal resolves the envelope's relative `ontology.yaml` only beside a file. The path is the folder, not
+the new file: Portal mounts a folder's newest `*.graph.json`, and since Portal 0.3.5 records a mount by path as a
+`ui:mount:<name>` node that an approval saves and a restart mounts again, so with the folder a saved mount
+follows the latest run instead of the one that happened to be approved. A portal that is not listening
 is not a build failure: Up prints the layer path and `portal not up on 8200`. A portal that answers and refuses the
 layer is one. `-NoPortal` skips the export and the POST.
 

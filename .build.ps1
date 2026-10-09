@@ -254,7 +254,9 @@ task Up {
     $layerFile = Join-Path $layersDir "$($graph.layer -replace ':', '-').runs.graph.json"
     $written = Get-Content -LiteralPath $layerFile -Raw | ConvertFrom-Json -DateKind String
     $relative = [System.IO.Path]::GetRelativePath($BuildRoot, $layerFile).Replace('\', '/')
-    $portal = Send-PortalLayer -Url $PortalUrl -Name $PortalLayerName -Path $layerFile
+    # The folder, not the file: Portal mounts a folder's newest *.graph.json, now and on every boot after an approval
+    # saves the mount, so a saved mount follows the latest run rather than the one that was approved.
+    $portal = Send-PortalLayer -Url $PortalUrl -Name $PortalLayerName -Path $layersDir
     $record.export = [ordered]@{
         layer    = $written.layer
         path     = $relative

@@ -18,7 +18,8 @@ Each repo is its own git repo; changes that span them are committed in each.
 
 - `Invoke-Build`: Modules, Image, Up, Smoke, Alerts, Down, Pester, Runs. Needs Docker running.
 - Up replaces a stack that is already up (`-NoReplace` throws instead), then exports the ledger's runs with
-  Graph.Emitter.Agent and POSTs the layer to Portal on `http://127.0.0.1:8200` (`-NoPortal` skips; a portal that
+  Graph.Emitter.Agent and POSTs `{name: agent-runs, path: <repo>rtifacts\layers}` (the folder, so Portal mounts the newest
+  run) to Portal on `http://127.0.0.1:8200` (`-NoPortal` skips; a portal that
   is not up is a warning, not a failure). Design 11.
 - `Invoke-Build Clean`: also drops the volumes.
 - `Invoke-Build Status`: compose project, its networks and volumes; fails if any host port is published.
