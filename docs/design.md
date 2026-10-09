@@ -154,3 +154,37 @@ Cross-link without an edge: the Run's `properties.alertsLayer` is the alerts lay
 Finding in the alerts layer would dangle in this envelope (and `alert:` belongs to Claude.Agent.Alerts), so the
 join is left to the portal, which mounts both layers. The envelope's `version` is the run-report ontology's
 (0.2.1), because the module it declares is Graph.RunReport, not Claude.Agent.
+
+## 11. Up draws the run on the portal, and replaces a stack that is already up
+
+A run should be visible when Up finishes, not after the whole chain. So Up ends by exporting the ledger with
+Graph.Emitter.Agent's `Export-AgentRunGraph` (`-Strict`, so an error finding such as a broken chain or a denied
+call that ran fails Up) into `artifacts/layers/<stamp>.runs.graph.json`, posting that file's path to Portal's
+`POST /api/layers` on `http://127.0.0.1:8200` as layer `agent-runs`, and printing one line,
+`agent run <stamp> at http://127.0.0.1:8200/ (<n> nodes, <m> edges)`. The layer is posted by path, not as a body,
+because Portal resolves the envelope's relative `ontology.yaml` only beside a file. A portal that is not listening
+is not a build failure: Up prints the layer path and `portal not up on 8200`. A portal that answers and refuses the
+layer is one. `-NoPortal` skips the export and the POST.
+
+The ledger is still copied out in Smoke, after the keeper has stopped; Up needs it earlier. Up waits for the keeper
+to drain the spool, then copies `ledger.jsonl` alone off the volume (never `key.bin`, which only Smoke's
+`Test-Ledger` needs and then deletes). Nothing is written after the agent exits, so that copy is the whole run.
+The layer holds every run in the ledger, not only the last, because the ledger volume keeps them all.
+
+`policy.json` is copied out of the image before the run, byte for byte, to `artifacts/policy.json`: the emitter
+gives a decision its rule text only when the file's SHA-256 is the run's `agent.start` `policySha256`. Smoke now
+clears `artifacts/` except Up's three outputs (`policy.json`, `layers/`, `up.json`), which belong to the same run.
+
+The emitter is imported from `../Graph.Emitter.Agent`, not copied into `build/host-modules`: it finds its ontology
+and Graph.Node relative to its own checkout.
+
+Snapshots: from Claude.Agent.Ledger 0.2.4 the entrypoint spools `agent.snapshot` (`Get-AgentSnapshot`) right after
+`agent.egress-check`, whatever that found, and again just before `agent.stop`. A container cannot read its own image
+digest, so Up hands the image id in as `CLAUDE_AGENT_IMAGE_DIGEST`. Graph.Emitter.Agent 0.1.2 predates the kind and
+reports each snapshot as an `unknown-kind` info finding; that is expected until it learns it.
+
+Replace: Up used to `up -d --force-recreate` over whatever was there. Now, the shape of Portal's Up, a stack that
+is up (any container of the project running) is brought down, Up waits up to 30 s for its containers to go, brings
+it up and logs `replaced <old stamp> with <new stamp>`. A stack's stamp is when its agent container started, else
+its earliest running container. `-NoReplace` throws instead and touches nothing. Everything Up did is recorded in
+`artifacts/up.json`, which `tests/Up.Tests.ps1` reads.

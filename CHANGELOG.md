@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.5 - 2026-10-09
+
+- 0.4.5: Up exports the run to 8200; policy.json to host; snapshot entries; Up replaces
+- Visibility: Up ends by waiting for the keeper to drain, copying `ledger.jsonl` (never `key.bin`) to
+  `artifacts/ledger/`, importing `../Graph.Emitter.Agent` (0.1.2), running `Export-AgentRunGraph -LedgerPath
+  artifacts/ledger/ledger.jsonl -PolicyPath artifacts/policy.json -LayersPath artifacts/layers -Strict`, POSTing the
+  layer's path to `http://127.0.0.1:8200/api/layers` as layer `agent-runs`, and printing
+  `agent run <stamp> at http://127.0.0.1:8200/ (<n> nodes, <m> edges)`. With nothing on 8200 it prints the layer path
+  and `portal not up on 8200` and carries on. `-NoPortal` skips the export. Design 11.
+- `artifacts/policy.json`: Up copies the image's `/opt/agent/policy/policy.json` out byte for byte before the run, so
+  its SHA-256 is `agent.start`'s `policySha256` and the export gets rule text without `docker cp`.
+- Snapshots (Claude.Agent.Ledger 0.2.4 handoff): the entrypoint spools `agent.snapshot` (`Get-AgentSnapshot -At
+  agent.egress-check`) right after the egress-check entry and `-At agent.stop` just before `agent.stop`. Up hands the
+  image id in as `CLAUDE_AGENT_IMAGE_DIGEST` (new `compose.yaml` variable), so `imageDigest` is not null. Smoke checks
+  the order egress-check, snapshot, start, ..., snapshot, stop and the digest; the report's `ledger` gains
+  `snapshots`, `imageDigest` and `policySha256`.
+- Ledger 0.2.4 workaround: `Add-LedgerEntry` and `Get-Ledger` parse a line without `-AsHashtable`, which throws on a
+  snapshot env holding `HTTP_PROXY` and `http_proxy`. The entrypoint drops only that error after the line is spooled
+  (`Add-SnapshotEntry`); Smoke and Alerts read `ledger.jsonl` with `ConvertFrom-Json -AsHashtable`. To be fixed in
+  Claude.Agent.Ledger.
+- Up replaces a stack that is up: `docker compose down`, wait up to 30 s for its containers to go, up, log
+  `replaced <old stamp> with <new stamp>` (a stack's stamp is its agent container's start). `-NoReplace` throws and
+  touches nothing. The shape of Portal 0.3.4's Up.
+- Smoke clears `artifacts/` except Up's outputs (`policy.json`, `layers/`, `up.json`). Up records what it did in
+  `artifacts/up.json`. New `tools/Up.ps1` (helpers) and `tests/Up.Tests.ps1` (helpers without Docker, the
+  entrypoint and compose wiring, and `up.json` from the real run).
+
 ## 0.4.4 - 2026-10-08
 
 - 0.4.4: git-guard hook; run-report 0.2.2; graph-node 0.2.1

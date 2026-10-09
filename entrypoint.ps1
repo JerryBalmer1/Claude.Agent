@@ -1,8 +1,9 @@
 #Requires -Version 7.4
 # Agent container entrypoint.
 #   Phase 1 (root):  wait for the mitmproxy CA on /ca, add it to the system store, re-exec as `agent`.
-#   Phase 2 (agent): check there is no direct route out, merge the policy hooks into ~/.claude/settings.json,
-#                    do one run (claude -p with a credential, a curl probe without), exit 0. Every step is
+#   Phase 2 (agent): check there is no direct route out, snapshot the container, merge the policy hooks into
+#                    ~/.claude/settings.json, do one run (claude -p with a credential, a curl probe without),
+#                    snapshot again, exit 0. Every step is
 #                    written to the spool; the `ledger` sidecar chains it. This container never holds the ledger
 #                    key and cannot read or verify the ledger.
 # Policy: /opt/agent/policy (root-owned, read-only) holds policy.json, the hooks and settings.json. Every tool call
@@ -45,6 +46,14 @@ $env:NODE_EXTRA_CA_CERTS = $caPath
 
 Import-Module Claude.Agent.Ledger
 
+# Claude.Agent.Ledger 0.2.4's Add-LedgerEntry spools the line, then returns it through ConvertFrom-Json without
+# -AsHashtable, which throws on the snapshot's env: this container has HTTP_PROXY and http_proxy. The line is
+# spooled by then, so that one error is dropped; any other still stops the script.
+function Add-SnapshotEntry([string] $At) {
+    try { Add-LedgerEntry -Spool $spool -Kind 'agent.snapshot' -Body (Get-AgentSnapshot -At $At) -ErrorAction Stop | Out-Null }
+    catch { if ($_.FullyQualifiedErrorId -notlike 'KeysWithDifferentCasingInJsonString,*') { throw } }
+}
+
 # The proxy env is a convenience. The control is the internal network: going direct must fail.
 $direct = & curl --noproxy '*' -sS -m 5 https://api.anthropic.com/ 2>&1
 $directExit = $LASTEXITCODE
@@ -54,6 +63,9 @@ Add-LedgerEntry -Spool $spool -Kind 'agent.egress-check' -Body @{
     curlExit      = $directExit
     detail        = ($direct | Out-String).Trim()
 } | Out-Null
+# What this container holds before the run, whatever the egress check found (Ledger stream contract, agent.snapshot).
+# imageDigest comes from CLAUDE_AGENT_IMAGE_DIGEST, which the build hands in.
+Add-SnapshotEntry -At agent.egress-check
 if (-not $directBlocked) {
     Write-Host 'agent.egress-check FAILED: reached https://api.anthropic.com/ without the proxy'
     exit 3
@@ -117,6 +129,8 @@ else {
     Write-Host "agent.probe $url -> $status (curl exit $curlExit)"
 }
 
+# The same again after the run; what differs from the first snapshot changed during it.
+Add-SnapshotEntry -At agent.stop
 Add-LedgerEntry -Spool $spool -Kind 'agent.stop' -Body @{} | Out-Null
 Write-Host 'agent.stop; entries spooled for the ledger keeper'
 exit 0

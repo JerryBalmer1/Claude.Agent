@@ -3,16 +3,22 @@
 End-to-end build for Claude.Agent (Invoke-Build).
 .DESCRIPTION
 Default chain: Modules, Image, Up, Smoke, Alerts, Down, Pester, Runs. Status is on its own.
+Up replaces a stack that is already up (-NoReplace throws instead) and ends by exporting the ledger's runs with
+Graph.Emitter.Agent and mounting the layer on the portal at http://127.0.0.1:8200 (-NoPortal skips both; design 11).
 Project name and reserved port: -Project / -Port, else COMPOSE_PROJECT_NAME / CLAUDE_AGENT_PORT from .env, else
 from the environment, else claude-agent-dev / 8300 (.env.example). Every docker compose call gets both (design 9).
 Assumes the sibling repos Claude.Agent.Ledger, Claude.Agent.Network, Claude.Agent.Policy and Claude.Agent.Alerts,
-and Graph.Node, sit next to this one.
+and Graph.Node and Graph.Emitter.Agent, sit next to this one.
 #>
 param(
     [string] $Project,
     [int] $Port,
     [string] $ImageName = 'claude-agent:dev',
-    [string] $LedgerImageName = 'claude-agent-ledger:dev'
+    [string] $LedgerImageName = 'claude-agent-ledger:dev',
+    # Up: skip the run export and the portal POST.
+    [switch] $NoPortal,
+    # Up: throw when the stack is already up instead of replacing it.
+    [switch] $NoReplace
 )
 
 # A setting from .env if it is there and non-empty, else from the environment, else the default (design 9).
@@ -80,6 +86,14 @@ $PolicySmokeFile = '/work/policy-smoke.txt'
 $GraphNodeExe = Join-Path $HostModulesDir ('GraphNode/bin/' + $(if ($IsWindows) { 'win-x64/graphnode.exe' } else { 'linux-x64/graphnode' }))
 $RunReportOntology = Join-Path $BuildRoot '.claude/skills/run-report/reference/ontology.yaml'
 $ChainTasks = 'Modules', 'Image', 'Up', 'Smoke', 'Alerts', 'Down', 'Pester'
+# Up's export (design 11): the emitter is imported from its checkout, not copied, because it finds its ontology and
+# Graph.Node relative to the repo it sits in. The portal is Portal's fixed port; the layer is mounted by path.
+$AgentEmitter = Join-Path $SiblingRoot 'Graph.Emitter.Agent/src/Graph.Emitter.Agent'
+$PortalUrl = 'http://127.0.0.1:8200'
+$PortalLayerName = 'agent-runs'
+# What Up writes under artifacts/; Smoke clears the rest and keeps these, which belong to the same run.
+$UpOutputs = 'policy.json', 'layers', 'up.json'
+. (Join-Path $BuildRoot 'tools/Up.ps1')
 
 # True when Compose will hand the agent a non-empty $Name: from the shell environment, else from .env
 # (the same precedence as Compose interpolation). Only presence is checked; no value is printed, stored or written.
@@ -108,6 +122,30 @@ function Get-ServiceContainer([string] $Service) {
     $id = exec { Invoke-Compose ps -a -q $Service }
     assert $id "$Service container not found"
     $id
+}
+
+# `docker inspect` of every container in the project, running or stopped.
+function Get-ProjectContainer {
+    $ids = @(exec { docker ps -a -q --filter "label=com.docker.compose.project=$Project" } | Where-Object { $_ })
+    if ($ids) { (exec { docker inspect @ids }) -join "`n" | ConvertFrom-Json }
+}
+
+# The agent only spools; true once the keeper has chained everything (/spool/pending.jsonl empty), within 30 s.
+function Wait-SpoolDrained {
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    while ($clock.Elapsed.TotalSeconds -lt 30) {
+        Invoke-Compose exec -T ledger sh -c 'test ! -s /spool/pending.jsonl' 2>$null
+        if ($LASTEXITCODE -eq 0) { return [pscustomobject]@{ Drained = $true; Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1) } }
+        Start-Sleep -Milliseconds 500
+    }
+    [pscustomobject]@{ Drained = $false; Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1) }
+}
+
+# Copies files off an image or volume through a container that is created but never started.
+function Copy-FromContainer([string[]] $CreateArgs, [string] $From, [string] $To) {
+    $cid = exec { docker create @CreateArgs }
+    try { exec { docker cp "${cid}:$From" $To } }
+    finally { exec { docker rm $cid } | Out-Null }
 }
 
 # Synopsis: Copy each sibling's src/<Module> into build/modules, and the policy hooks into build/policy (the image build context); Alerts and GraphNode into build/host-modules.
@@ -151,22 +189,99 @@ task Image {
     exec { Invoke-Compose build agent ledger }
 }
 
-# Synopsis: Start mitm, ledger and agent, wait for the agent to exit, require exit 0.
+# Synopsis: Replace a running stack (-NoReplace throws), write artifacts/policy.json, start mitm, ledger and agent, require exit 0; then export the ledger's runs and mount them on the portal at 8200 (-NoPortal skips).
 task Up {
     $auth = Get-AgentAuth
     $path = if ($auth) { "run (auth: $auth; claude -p)" } else { 'probe (no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY: curl probe)' }
     print Cyan "run path: $path"
-    exec { Invoke-Compose up -d --force-recreate }
+    New-Item -ItemType Directory -Path $Artifacts -Force | Out-Null
+    $record = [ordered]@{ project = $Project; started = [DateTime]::UtcNow.ToString('o') }
+
+    # The image the agent runs, for agent.snapshot's imageDigest (a container cannot read its own; design 11).
+    $env:CLAUDE_AGENT_IMAGE_DIGEST = exec { docker image inspect $ImageName --format '{{.Id}}' }
+    $record.imageDigest = $env:CLAUDE_AGENT_IMAGE_DIGEST
+    print Cyan "image digest: $env:CLAUDE_AGENT_IMAGE_DIGEST"
+
+    # The policy the run will be decided by, byte for byte (its SHA-256 is agent.start's policySha256), so the
+    # export reads it from the host.
+    $policyFile = Join-Path $Artifacts 'policy.json'
+    Remove-Item -LiteralPath $policyFile -Force -ErrorAction Ignore
+    Copy-FromContainer -CreateArgs '--network', 'none', $ImageName -From '/opt/agent/policy/policy.json' -To $policyFile
+    $record.policy = [ordered]@{ path = 'artifacts/policy.json'; sha256 = (Get-FileHash -LiteralPath $policyFile -Algorithm SHA256).Hash.ToLowerInvariant() }
+
+    $stack = Invoke-StackUp -Label "compose project $Project" -NoReplace:$NoReplace `
+        -GetStamp { Get-StackStamp -Containers @(Get-ProjectContainer) } `
+        -Down { exec { Invoke-Compose down } } `
+        -WaitGone {
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            while (@(Get-ProjectContainer).Count -and $clock.Elapsed.TotalSeconds -lt 30) { Start-Sleep -Milliseconds 500 }
+            assert (-not @(Get-ProjectContainer).Count) "compose project $Project still has containers 30 s after down"
+        } `
+        -Start { exec { Invoke-Compose up -d --force-recreate } }
+    $record.stack = [ordered]@{ replaced = $stack.Replaced; stamp = $stack.Stamp }
+    if ($stack.Replaced) { print Green "replaced $($stack.Replaced) with $($stack.Stamp)" }
+
     $id = Get-ServiceContainer agent
     $code = exec { docker wait $id }
     exec { Invoke-Compose logs --no-color agent }
+    $record.agentExit = [int]$code
+    $recordPath = Join-Path $Artifacts 'up.json'
+    $writeRecord = { $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $recordPath -Encoding utf8NoBOM }
+    & $writeRecord
     assert ($code -eq '0') "agent exited with $code"
+
+    if ($NoPortal) {
+        $record.export = [ordered]@{ skipped = '-NoPortal' }
+        & $writeRecord
+        print Yellow 'run export skipped (-NoPortal)'
+        return
+    }
+
+    # Visibility (design 11): once the keeper has chained the run, copy ledger.jsonl out (never key.bin), draw
+    # every run in it with Graph.Emitter.Agent, and mount that layer on the portal.
+    $drain = Wait-SpoolDrained
+    assert $drain.Drained 'the keeper did not drain /spool/pending.jsonl within 30 s'
+    $ledgerDir = Join-Path $Artifacts 'ledger'
+    remove $ledgerDir
+    New-Item -ItemType Directory -Path $ledgerDir -Force | Out-Null
+    $ledgerFile = Join-Path $ledgerDir 'ledger.jsonl'
+    Copy-FromContainer -CreateArgs '--mount', "type=volume,source=${Project}_ledger,target=/ledger", $LedgerImageName -From '/ledger/ledger.jsonl' -To $ledgerFile
+
+    assert (Test-Path (Join-Path $AgentEmitter 'Graph.Emitter.Agent.psd1')) "Graph.Emitter.Agent missing at $AgentEmitter. Clone it next to Claude.Agent, or run Up -NoPortal."
+    Import-Module $AgentEmitter -Force
+    $layersDir = Join-Path $Artifacts 'layers'
+    $graph = Export-AgentRunGraph -LedgerPath $ledgerFile -PolicyPath $policyFile -LayersPath $layersDir -Strict
+    $layerFile = Join-Path $layersDir "$($graph.layer -replace ':', '-').runs.graph.json"
+    $written = Get-Content -LiteralPath $layerFile -Raw | ConvertFrom-Json -DateKind String
+    $relative = [System.IO.Path]::GetRelativePath($BuildRoot, $layerFile).Replace('\', '/')
+    $portal = Send-PortalLayer -Url $PortalUrl -Name $PortalLayerName -Path $layerFile
+    $record.export = [ordered]@{
+        layer    = $written.layer
+        path     = $relative
+        root     = $written.root
+        nodes    = $written.counts.nodes
+        edges    = $written.counts.edges
+        findings = @($written.findings | Group-Object severity | Sort-Object Name | ForEach-Object { [ordered]@{ severity = $_.Name; count = $_.Count } })
+        portal   = [ordered]@{ url = $portal.Url; name = $PortalLayerName; posted = $portal.Posted; warning = $portal.Warning }
+        line     = $null
+    }
+    if ($portal.Posted) {
+        $record.export.line = Format-AgentRunLine -Stamp $written.layer -Url $portal.Url -Nodes $written.counts.nodes -Edges $written.counts.edges
+        & $writeRecord
+        print Green $record.export.line
+    }
+    else {
+        & $writeRecord
+        print Cyan "agent run $($written.layer): $relative ($($written.counts.nodes) nodes, $($written.counts.edges) edges)"
+        print Yellow "$($portal.Warning); the layer is written but not mounted (Portal: Invoke-Build Up)"
+    }
 }
 
 # Synopsis: Drain the spool, pull the ledger and capture out, check isolation, write artifacts/smoke-report.json.
 task Smoke {
-    remove $Artifacts
+    # Everything from earlier runs goes; what Up wrote for this run stays.
     New-Item -ItemType Directory -Path $Artifacts -Force | Out-Null
+    Get-ChildItem -LiteralPath $Artifacts -Force | Where-Object Name -notin $UpOutputs | Remove-Item -Recurse -Force
     Import-Module (Join-Path $ModulesDir 'Claude.Agent.Ledger') -Force
     Import-Module (Join-Path $ModulesDir 'Claude.Agent.Network') -Force
     $auth = Get-AgentAuth
@@ -175,14 +290,9 @@ task Smoke {
 
     # The agent only spools; wait for the keeper to chain everything, then stop it (SIGTERM flushes once more).
     exec { Invoke-Compose stop agent }
-    $drainClock = [Diagnostics.Stopwatch]::StartNew()
-    $drained = $false
-    while ($drainClock.Elapsed.TotalSeconds -lt 30) {
-        Invoke-Compose exec -T ledger sh -c 'test ! -s /spool/pending.jsonl' 2>$null
-        if ($LASTEXITCODE -eq 0) { $drained = $true; break }
-        Start-Sleep -Milliseconds 500
-    }
-    $drainSeconds = [math]::Round($drainClock.Elapsed.TotalSeconds, 1)
+    $drain = Wait-SpoolDrained
+    $drained = $drain.Drained
+    $drainSeconds = $drain.Seconds
     exec { Invoke-Compose stop ledger }
     $keeperExit = [int](exec { docker inspect $keeperId --format '{{.State.ExitCode}}' })
 
@@ -202,12 +312,28 @@ task Smoke {
     Remove-Item (Join-Path $ledgerDir 'key.bin') -Force
 
     # A run begins with its egress check; take everything from the last one on.
-    $entries = @(Get-Ledger -Path $ledgerDir)
+    # Not Get-Ledger: Claude.Agent.Ledger 0.2.4 parses each line without -AsHashtable, which throws on an
+    # agent.snapshot env holding HTTP_PROXY and http_proxy. Hashtables answer .kind and .body the same way.
+    $entries = @(Get-Content -LiteralPath (Join-Path $ledgerDir 'ledger.jsonl') | ConvertFrom-Json -AsHashtable -DateKind String)
     $lastCheck = [array]::FindLastIndex([object[]]$entries, [Predicate[object]] { param($e) $e.kind -eq 'agent.egress-check' })
     $lastRun = if ($lastCheck -ge 0) { @($entries[$lastCheck..($entries.Count - 1)]) } else { @() }
     $egress = $lastRun | Where-Object kind -eq 'agent.egress-check' | Select-Object -First 1
     $start = $lastRun | Where-Object kind -eq 'agent.start' | Select-Object -First 1
     $outcome = $lastRun | Where-Object kind -in 'agent.run', 'agent.probe' | Select-Object -Last 1
+    # Ledger 0.2.4 agent.snapshot: one after the egress check, one before agent.stop (design 11).
+    $snapshots = @($lastRun | Where-Object kind -eq 'agent.snapshot' | ForEach-Object {
+            [ordered]@{
+                at          = $_.body.at
+                imageDigest = $_.body.imageDigest
+                uid         = $_.body.uid
+                user        = $_.body.user
+                packages    = @($_.body.packages).Count
+                executables = @($_.body.executables).Count
+                errors      = @($_.body.errors)
+            }
+        })
+    $upRecordPath = Join-Path $Artifacts 'up.json'
+    $expectedDigest = if (Test-Path -LiteralPath $upRecordPath) { (Get-Content -LiteralPath $upRecordPath -Raw | ConvertFrom-Json).imageDigest } else { $null }
 
     # Isolation: no key.bin in the agent image, no ledger mount on the agent container, agent on `inside` only.
     $keyBinInImage = @(& docker run --rm --network none --entrypoint find $ImageName / -xdev -name key.bin 2>$null | Where-Object { $_ })
@@ -297,6 +423,9 @@ task Smoke {
             mode          = if ($outcome) { $outcome.kind } else { $null }
             outcome       = if ($outcome) { $outcome.body } else { $null }
             claudeVersion = if ($start) { $start.body.claudeVersion } else { $null }
+            policySha256  = if ($start) { $start.body.policySha256 } else { $null }
+            snapshots     = $snapshots
+            imageDigest   = $expectedDigest
         }
         capture   = [ordered]@{
             flows          = $flows.Count
@@ -334,6 +463,13 @@ task Smoke {
     assert $ledgerValid "Test-Ledger failed: $ledgerError"
     assert ($lastRun.kind -contains 'agent.start') 'no agent.start in the ledger'
     assert ($lastRun.kind -contains 'agent.stop') 'last run has no agent.stop'
+    $order = @($lastRun.kind)
+    assert ($order.Count -ge 5 -and $order[1] -eq 'agent.snapshot' -and $order[2] -eq 'agent.start' -and $order[-2] -eq 'agent.snapshot') "last run is not egress-check, snapshot, start, ..., snapshot, stop: $($order -join ', ')"
+    assert ((@($snapshots.at) -join ',') -eq 'agent.egress-check,agent.stop') "snapshot at values: $(@($snapshots.at) -join ', ')"
+    foreach ($s in $snapshots) {
+        assert ($s.imageDigest -match '^sha256:[0-9a-f]{64}$') "agent.snapshot at $($s.at) has imageDigest '$($s.imageDigest)'"
+        if ($expectedDigest) { assert ($s.imageDigest -eq $expectedDigest) "agent.snapshot at $($s.at) has imageDigest $($s.imageDigest); Up handed in $expectedDigest" }
+    }
     assert ($report.egress.directBlocked -eq $true) 'the agent reached api.anthropic.com without the proxy'
     assert ($strayPorts.Count -eq 0) "host ports other than the reserved $Port are published: $(($strayPorts | ForEach-Object { "$($_.service):$($_.hostPort) ($($_.source))" }) -join ', ')"
     assert $insideInternal "network ${Project}_inside is not internal"
@@ -381,7 +517,8 @@ task Alerts {
     Import-Module (Join-Path $HostModulesDir 'Claude.Agent.Alerts') -Force
 
     # The ledger keeps every run until Clean; alert on the last one, which begins with its egress check (as Smoke reads it).
-    $lastCheck = Get-Content -LiteralPath $ledgerFile | ConvertFrom-Json | Where-Object kind -eq 'agent.egress-check' | Select-Object -Last 1
+    # -AsHashtable: an agent.snapshot env holds names that differ only in case.
+    $lastCheck = Get-Content -LiteralPath $ledgerFile | ConvertFrom-Json -AsHashtable | Where-Object kind -eq 'agent.egress-check' | Select-Object -Last 1
     $fromSeq = if ($lastCheck) { [long]$lastCheck.seq } else { $null }
     $findings = @(Invoke-LedgerAlert -LedgerPath $ledgerFile -FromSeq $fromSeq)
     $alertsDir = Join-Path $Artifacts 'alerts'

@@ -8,14 +8,18 @@ Claude Code container image plus an end-to-end `Invoke-Build` that proves it. On
 - `Claude.Agent.Policy`: the tool policy module, schema and Claude Code hooks baked at `/opt/agent/policy`.
 - `Claude.Agent.Alerts`: host-only ledger reader; the Alerts task writes its findings as a GraphNode layer.
 
-**Sibling-path assumption:** the other four repos, and `Graph.Node` (GraphNode, read-only here), are checked out
-next to this one (`../Claude.Agent.Ledger`, `../Claude.Agent.Network`, `../Claude.Agent.Policy`,
-`../Claude.Agent.Alerts`, `../Graph.Node`). `.build.ps1` (Modules task) and `compose.yaml` (`include:`) rely on it.
+**Sibling-path assumption:** the other four repos, and `Graph.Node` (GraphNode) and `Graph.Emitter.Agent`, both
+read-only here, are checked out next to this one (`../Claude.Agent.Ledger`, `../Claude.Agent.Network`,
+`../Claude.Agent.Policy`, `../Claude.Agent.Alerts`, `../Graph.Node`, `../Graph.Emitter.Agent`). `.build.ps1`
+(Modules, and Up's export) and `compose.yaml` (`include:`) rely on it.
 Each repo is its own git repo; changes that span them are committed in each.
 
 ## Commands
 
 - `Invoke-Build`: Modules, Image, Up, Smoke, Alerts, Down, Pester, Runs. Needs Docker running.
+- Up replaces a stack that is already up (`-NoReplace` throws instead), then exports the ledger's runs with
+  Graph.Emitter.Agent and POSTs the layer to Portal on `http://127.0.0.1:8200` (`-NoPortal` skips; a portal that
+  is not up is a warning, not a failure). Design 11.
 - `Invoke-Build Clean`: also drops the volumes.
 - `Invoke-Build Status`: compose project, its networks and volumes; fails if any host port is published.
 - Pester only via `pwsh -NoProfile -File tests/Invoke-Tests.ps1`; it reads `artifacts/smoke-report.json`, so Smoke must have run.

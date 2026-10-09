@@ -24,6 +24,9 @@ services:
       # mode, both set and the agent refuses to start. Never written anywhere by the build.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # The image's id (sha256:...), set by the build's Up task, for agent.snapshot's imageDigest; a container
+      # cannot read its own. Empty when Compose is run by hand, and imageDigest is then null.
+      CLAUDE_AGENT_IMAGE_DIGEST: ${CLAUDE_AGENT_IMAGE_DIGEST:-}
       # A convenience so tools find the proxy; the control is that `inside` has no other way out.
       HTTP_PROXY: http://mitm:8080
       HTTPS_PROXY: http://mitm:8080

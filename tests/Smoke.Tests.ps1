@@ -74,10 +74,29 @@ Describe 'Smoke report' {
             $report.ledger.error | Should -BeNullOrEmpty
         }
 
-        It 'last run is egress-check, start, ..., stop' {
+        It 'last run is egress-check, snapshot, start, ..., snapshot, stop' {
             $report.ledger.lastRunKinds[0] | Should -Be 'agent.egress-check'
-            $report.ledger.lastRunKinds[1] | Should -Be 'agent.start'
+            $report.ledger.lastRunKinds[1] | Should -Be 'agent.snapshot'
+            $report.ledger.lastRunKinds[2] | Should -Be 'agent.start'
+            $report.ledger.lastRunKinds[-2] | Should -Be 'agent.snapshot'
             $report.ledger.lastRunKinds[-1] | Should -Be 'agent.stop'
+        }
+
+        It 'last run has exactly two agent.snapshot entries, at the egress check and at stop' {
+            @($report.ledger.lastRunKinds | Where-Object { $_ -eq 'agent.snapshot' }).Count | Should -Be 2
+            @($report.ledger.snapshots.at) | Should -Be @('agent.egress-check', 'agent.stop')
+        }
+
+        It 'each snapshot carries the image digest Up handed in, and saw the agent user' {
+            $report.ledger.imageDigest | Should -Match '^sha256:[0-9a-f]{64}$'
+            foreach ($s in $report.ledger.snapshots) {
+                $s.imageDigest | Should -Be $report.ledger.imageDigest
+                $s.uid | Should -Be 10001
+                $s.user | Should -Be 'agent'
+                $s.packages | Should -BeGreaterThan 0
+                $s.executables | Should -BeGreaterThan 0
+                @($s.errors) | Should -BeNullOrEmpty
+            }
         }
 
         It 'last run has exactly one agent.run or agent.probe' {
