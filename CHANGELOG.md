@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Alerts (design 7): Modules copies the fifth sibling, Claude.Agent.Alerts, and Graph.Node's GraphNode into
+  `build/host-modules/` (in `.dockerignore`; no image gets them). A new Alerts task after Smoke runs
+  `Invoke-LedgerAlert` over the last run of `artifacts/ledger/ledger.jsonl`, writes the GraphNode layer to
+  `artifacts/alerts/<utcStamp>.graph.json`, and adds `alerts {fromSeq, total, bySeverity, byRule, errors[],
+  findings[], envelope}` to the report. Alerts and Pester require exactly one error finding on a `claude -p`
+  run, the smoke delete's `policy.deny`, and none on a probe run. Chain: Modules, Image, Up, Smoke, Alerts, Down, Pester.
+- Report: `capture.anthropic` is now `capture.allowed`, the flows the allowlist let through (it was the flows
+  to `api.anthropic.com`, refused or not). Pester checks they are all `api.anthropic.com` and that no
+  `api.anthropic.com` flow was refused.
+- Keeper first (design 8): `ledger` has a healthcheck (`/spool/seq` exists) and `agent` waits for
+  `service_healthy` instead of `service_started`, so the keeper's seq sync is done before the agent writes.
+- Clean also removes `build/policy` and `build/host-modules`.
+
 - Tool policy (Claude.Agent.Policy, design 6): Modules copies the fourth sibling; the image generates
   `policy.json` from `vendor/Graph.Emitter.FileSystem/ontology.yaml` with `New-Policy`, checks it with
   `Test-Policy`, and bakes it with the hooks and `settings.json` root-owned and read-only at `/opt/agent/policy`.

@@ -11,6 +11,9 @@
 		},
 		{
 			"path": "../Claude.Agent.Policy"
+		},
+		{
+			"path": "../Claude.Agent.Alerts"
 		}
 	],
 	"settings": {}

@@ -1,4 +1,6 @@
-# The build context needs only the Dockerfile, entrypoint.ps1 and build/modules.
+# The build context needs only the Dockerfile, entrypoint.ps1 and build/modules (+ build/policy, vendor/).
+# build/host-modules (Alerts, GraphNode) runs on the host only and must never reach an image.
+build/host-modules
 .git
 .env
 .env.*

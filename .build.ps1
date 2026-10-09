@@ -2,8 +2,9 @@
 .SYNOPSIS
 End-to-end build for Claude.Agent (Invoke-Build).
 .DESCRIPTION
-Default chain: Modules, Image, Up, Smoke, Down, Pester.
-Assumes the sibling repos Claude.Agent.Ledger, Claude.Agent.Network and Claude.Agent.Policy sit next to this one.
+Default chain: Modules, Image, Up, Smoke, Alerts, Down, Pester.
+Assumes the sibling repos Claude.Agent.Ledger, Claude.Agent.Network, Claude.Agent.Policy and Claude.Agent.Alerts,
+and Graph.Node, sit next to this one.
 #>
 param(
     [string] $Project = 'claude-agent-dev',
@@ -14,6 +15,8 @@ param(
 $SiblingRoot = Split-Path -Parent $BuildRoot
 $Siblings = 'Claude.Agent.Ledger', 'Claude.Agent.Network', 'Claude.Agent.Policy'
 $ModulesDir = Join-Path $BuildRoot 'build/modules'
+# Host-only modules (design 7): never copied into an image; .dockerignore keeps them out of the build context.
+$HostModulesDir = Join-Path $BuildRoot 'build/host-modules'
 $PolicyDir = Join-Path $BuildRoot 'build/policy'
 $Artifacts = Join-Path $BuildRoot 'artifacts'
 $VendoredOntology = Join-Path $BuildRoot 'vendor/Graph.Emitter.FileSystem/ontology.yaml'
@@ -49,9 +52,9 @@ function Get-ServiceContainer([string] $Service) {
     $id
 }
 
-# Synopsis: Copy each sibling's src/<Module> into build/modules, and the policy hooks into build/policy (the image build context).
+# Synopsis: Copy each sibling's src/<Module> into build/modules, and the policy hooks into build/policy (the image build context); Alerts and GraphNode into build/host-modules.
 task Modules {
-    remove $ModulesDir, $PolicyDir
+    remove $ModulesDir, $PolicyDir, $HostModulesDir
     New-Item -ItemType Directory -Path $ModulesDir -Force | Out-Null
     foreach ($name in $Siblings) {
         $src = Join-Path $SiblingRoot "$name/src/$name"
@@ -73,6 +76,15 @@ task Modules {
     $upstream = Join-Path $SiblingRoot 'Graph.Emitter.FileSystem/ontology.yaml'
     if ((Test-Path $upstream) -and ((Get-FileHash $upstream).Hash -ne (Get-FileHash $VendoredOntology).Hash)) {
         print Yellow "vendor/Graph.Emitter.FileSystem/ontology.yaml differs from $upstream; recopy it if the change is wanted"
+    }
+
+    # Alerts runs on the host after Smoke, never in the agent image (design 7); it writes a GraphNode layer.
+    New-Item -ItemType Directory -Path $HostModulesDir -Force | Out-Null
+    foreach ($src in (Join-Path $SiblingRoot 'Claude.Agent.Alerts/src/Claude.Agent.Alerts'), (Join-Path $SiblingRoot 'Graph.Node/src/GraphNode')) {
+        $name = Split-Path -Leaf $src
+        assert (Test-Path (Join-Path $src "$name.psd1")) "Sibling module missing: $src. Clone it next to Claude.Agent."
+        Copy-Item -Path $src -Destination $HostModulesDir -Recurse
+        print Green "copied $name (host only)"
     }
 }
 
@@ -157,6 +169,7 @@ task Smoke {
     $captureSummary = Get-NetworkCapture -Path $captureJson -Summary
     $allowedHosts = @($flows | Where-Object { -not $_.refused } | ForEach-Object host | Sort-Object -Unique)
     $anthropic = @($flows | Where-Object host -eq 'api.anthropic.com')
+    $allowed = @($flows | Where-Object { -not $_.refused })
     $datadogIntake = 'http-intake.logs.us5.datadoghq.com'
 
     # Policy: what the image baked, who owns it, and what the hooks decided in the last run.
@@ -234,7 +247,7 @@ task Smoke {
                 refusedHosts = @($captureSummary.refusedHosts)
             }
             refused        = @($flows | Where-Object refused | Select-Object method, host, path, status, started)
-            anthropic      = @($anthropic | Select-Object method, host, path, status, requestBytes, responseBytes, started, refused)
+            allowed        = @($allowed | Select-Object method, host, path, status, requestBytes, responseBytes, started)
         }
         policy    = [ordered]@{
             generated       = $policy.generated
@@ -295,6 +308,56 @@ task Smoke {
     }
 }
 
+# Synopsis: Run Claude.Agent.Alerts over the last run in the copied ledger; write artifacts/alerts/<stamp>.graph.json and add `alerts` to smoke-report.json.
+task Alerts {
+    $reportPath = Join-Path $Artifacts 'smoke-report.json'
+    $ledgerFile = Join-Path $Artifacts 'ledger/ledger.jsonl'
+    assert (Test-Path $reportPath) "no $reportPath; run Smoke first"
+    Import-Module (Join-Path $HostModulesDir 'GraphNode') -Force
+    Import-Module (Join-Path $HostModulesDir 'Claude.Agent.Alerts') -Force
+
+    # The ledger keeps every run until Clean; alert on the last one, which begins with its egress check (as Smoke reads it).
+    $lastCheck = Get-Content -LiteralPath $ledgerFile | ConvertFrom-Json | Where-Object kind -eq 'agent.egress-check' | Select-Object -Last 1
+    $fromSeq = if ($lastCheck) { [long]$lastCheck.seq } else { $null }
+    $findings = @(Invoke-LedgerAlert -LedgerPath $ledgerFile -FromSeq $fromSeq)
+    $file = Export-LedgerAlert -Findings $findings -OutDir (Join-Path $Artifacts 'alerts') -LedgerPath $ledgerFile
+    $check = Test-Graph -Path $file.FullName -Strict
+    $graph = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+    $summary = Get-LedgerAlertSummary -Findings $findings
+    $errors = @($findings | Where-Object severity -eq 'error')
+
+    # -DateKind String: keep the report's stamps exactly as Smoke wrote them.
+    $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json -AsHashtable -DateKind String
+    $report.alerts = [ordered]@{
+        fromSeq    = $fromSeq
+        total      = $summary.total
+        bySeverity = $summary.bySeverity
+        byRule     = $summary.byRule
+        errors     = @($errors | ForEach-Object {
+                [ordered]@{ id = $_.id; rule = $_.rule; seq = $_.seq; kind = $_.kind; kindAction = $_.kindAction; path = $_.path; command = $_.command; message = $_.message }
+            })
+        findings   = @($findings | ForEach-Object { [ordered]@{ id = $_.id; severity = $_.severity; kind = $_.kind; detail = $_.detail } })
+        envelope   = [ordered]@{
+            path  = [System.IO.Path]::GetRelativePath($BuildRoot, $file.FullName) -replace '\', '/'
+            valid = $check.Valid
+            nodes = $graph.counts.nodes
+            edges = $graph.counts.edges
+        }
+    }
+    $report | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8NoBOM
+    print Cyan ($report.alerts | ConvertTo-Json -Depth 6)
+
+    assert $check.Valid "alerts envelope is not valid: $(($check.Problems | ForEach-Object { "$($_.Code) $($_.Path): $($_.Message)" }) -join '; ')"
+    if ($report.run.auth) {
+        # The smoke prompt's delete is the one thing a clean claude -p run should be refused.
+        assert ($errors.Count -eq 1) "expected exactly one error finding (the smoke delete's policy.deny), got $($errors.Count): $(($errors | ForEach-Object { "$($_.id) $($_.detail)" }) -join '; ')"
+        assert ($errors[0].rule -eq 'policy-deny' -and $errors[0].kindAction -eq 'File.delete' -and $errors[0].path -eq $PolicySmokeFile) "the one error is not the smoke delete's deny: $($errors[0].id) $($errors[0].kindAction) $($errors[0].path)"
+    }
+    else {
+        assert ($errors.Count -eq 0) "the probe run raised errors: $(($errors | ForEach-Object id) -join ', ')"
+    }
+}
+
 # Synopsis: Stop and remove containers; volumes are kept.
 task Down {
     exec { docker compose down }
@@ -308,7 +371,7 @@ task Pester {
 # Synopsis: Remove containers, volumes (spool, ledger, CA, capture), build/ and artifacts/.
 task Clean {
     exec { docker compose down --volumes }
-    remove $ModulesDir, $Artifacts
+    remove $ModulesDir, $PolicyDir, $HostModulesDir, $Artifacts
 }
 
-task . Modules, Image, Up, Smoke, Down, Pester
+task . Modules, Image, Up, Smoke, Alerts, Down, Pester

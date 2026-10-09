@@ -97,12 +97,14 @@ Describe 'Smoke report' {
         }
 
         It 'saw the response, not just the tunnel' {
-            @($report.capture.anthropic | Where-Object status).Count | Should -BeGreaterOrEqual 1
+            @($report.capture.allowed | Where-Object status).Count | Should -BeGreaterOrEqual 1
         }
 
         It 'let only api.anthropic.com through the allowlist' {
             @($report.capture.allowedHosts) | Should -Be @('api.anthropic.com')
-            @($report.capture.anthropic | Where-Object refused) | Should -HaveCount 0
+            @($report.capture.allowed.host | Sort-Object -Unique) | Should -Be @('api.anthropic.com')
+            @($report.capture.allowed).Count | Should -Be $report.capture.summary.allowed
+            @($report.capture.refused | Where-Object host -eq 'api.anthropic.com') | Should -HaveCount 0
         }
 
         It 'has a summary that matches the flows' {
@@ -152,6 +154,45 @@ Describe 'Smoke report' {
         It 'every pre decision names a rule, and nothing denied ran' -Skip:(-not $hasAuth) {
             foreach ($d in $report.policy.decisions) { $d.rule | Should -Match '^(rules\[\d+\]|default)$' }
             @($report.policy.decisions | Where-Object { $_.phase -eq 'post' -and $_.kind -eq 'policy.deny' }) | Should -HaveCount 0
+        }
+    }
+
+    Context 'alerts' {
+        It 'ran over the last run and wrote a valid GraphNode envelope' {
+            $report.alerts | Should -Not -BeNullOrEmpty
+            $report.alerts.fromSeq | Should -BeGreaterThan 0
+            $report.alerts.envelope.path | Should -Match '^artifacts/alerts/\d{8}T\d{6}Z\.graph\.json$'
+            Join-Path $PSScriptRoot '..' $report.alerts.envelope.path | Should -Exist
+            $report.alerts.envelope.valid | Should -BeTrue
+        }
+
+        It 'has a summary that matches its findings' {
+            $report.alerts.total | Should -Be @($report.alerts.findings).Count
+            $report.alerts.bySeverity.info + $report.alerts.bySeverity.warn + $report.alerts.bySeverity.error | Should -Be $report.alerts.total
+            $report.alerts.bySeverity.error | Should -Be @($report.alerts.errors).Count
+        }
+
+        It 'raised exactly one error, the policy.deny of the smoke prompt''s delete' -Skip:(-not $hasAuth) {
+            @($report.alerts.errors) | Should -HaveCount 1
+            $e = @($report.alerts.errors)[0]
+            $e.rule | Should -Be 'policy-deny'
+            $e.kind | Should -Be 'policy.deny'
+            $e.kindAction | Should -Be 'File.delete'
+            $e.path | Should -Be $report.policy.smokeFile
+            $e.id | Should -Be "alert:policy-deny:$($e.seq)"
+        }
+
+        It 'raised no error on a probe run' -Skip:$hasAuth {
+            @($report.alerts.errors) | Should -HaveCount 0
+        }
+
+        It 'the envelope holds one Finding per finding and one raised-by edge each' {
+            $g = Get-Content (Join-Path $PSScriptRoot '..' $report.alerts.envelope.path) -Raw | ConvertFrom-Json
+            $g.module | Should -Be 'Claude.Agent.Alerts'
+            @($g.nodes | Where-Object kind -eq 'Finding') | Should -HaveCount $report.alerts.total
+            @($g.edges | Where-Object kind -eq 'raised-by') | Should -HaveCount $report.alerts.total
+            $g.counts.nodes | Should -Be $report.alerts.envelope.nodes
+            $g.counts.edges | Should -Be $report.alerts.envelope.edges
         }
     }
 }

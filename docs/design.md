@@ -63,3 +63,39 @@ ledger to hold allow, allow, deny in that order and the file to survive, checked
 stopped container rather than by anything the agent reported. Which tool claude uses to delete is left to it,
 and nothing in the prompt or the deny message tells it not to try again, so `policy.afterDeny` in the report
 records whether it honoured the deny.
+
+## 7. Alerts read the copied ledger on the host, and write a layer
+
+After Smoke has verified the ledger and deleted the key from the host copy, the Alerts task runs
+Claude.Agent.Alerts over `artifacts/ledger/ledger.jsonl` (Claude.Agent.Alerts design 1: read-only, keyless,
+never on the agent network). The module and GraphNode are copied to `build/host-modules/`, not `build/modules/`:
+the Dockerfile copies `build/modules/` wholesale into the agent image, and a reader of the ledger has no
+business in the image whose behaviour it judges. `.dockerignore` keeps `build/host-modules` out of every build
+context.
+
+Alerts covers the last run only (`-FromSeq` = seq of the last `agent.egress-check`), the same unit Smoke
+reports, because the ledger volume accumulates runs until Clean. The layer goes to
+`artifacts/alerts/<utcStamp>.graph.json` for the portal; the report gets a summary and the error findings.
+
+The assertion is exact: on a `claude -p` run, one error, and it is the `policy.deny` of the prompt's delete.
+Any other error (a seq gap, a rejected spool line, a non-zero exit, a denied call that ran) means a broken
+run. Warnings (witnessed shell) do not fail the build; they are there to be read.
+
+## 8. The keeper starts first, and the agent waits until it has
+
+Claude.Agent.Ledger design 4: on start, the keeper raises the spool's seq counter to the last seq in the
+ledger, so a lost counter (spool volume recreated while the ledger volume is kept, or `seq` deleted) does not
+restart the writer at 1. That sync is only safe if it happens before the agent's first write; a writer that
+appends first takes seq 1 again and every later run fails `seq-gap`. Keeper-starts-first is what makes the
+sync safe.
+
+Compose enforces it. `agent` already had `depends_on: ledger: condition: service_started`, but that only orders
+container start: the keeper's pwsh could still be importing its module when the agent spooled
+`agent.egress-check`. Now `ledger` has a healthcheck, `test -f /spool/seq`, and `agent` waits for
+`service_healthy`. The file is the right signal because the sync always writes it when it is missing, and
+missing is exactly the dangerous case; when it is present (the normal case) the writer continues from it,
+which is already correct. `Invoke-Build Clean` drops spool and ledger together, so a fresh pair starts at 0
+on both sides.
+
+Not covered: a `seq` file that is present but lower than the ledger (edited by hand). The keeper still raises
+it on start, but the healthcheck does not wait for that. Nothing in this repo writes one.

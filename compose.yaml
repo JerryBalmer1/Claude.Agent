@@ -13,8 +13,9 @@ services:
     depends_on:
       mitm:
         condition: service_healthy
+      # The keeper must have synced the spool's seq counter to the ledger before the agent writes (design 8).
       ledger:
-        condition: service_started
+        condition: service_healthy
     env_file:
       - path: .env
         required: false
@@ -48,6 +49,13 @@ services:
       - spool:/spool
       - ledger:/ledger
     stop_grace_period: 15s
+    # Healthy once /spool/seq exists: the keeper writes it in its start-up sync when it is missing (lost or new),
+    # and it is only ever missing in exactly the case where an early writer would restart seq at 1 (design 8).
+    healthcheck:
+      test: ["CMD", "test", "-f", "/spool/seq"]
+      interval: 1s
+      timeout: 2s
+      retries: 60
     restart: "no"
 
 volumes:

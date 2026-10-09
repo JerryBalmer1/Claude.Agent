@@ -19,7 +19,8 @@ A green `Invoke-Build` means: both images build, the agent cannot reach the inte
 drains the spool into a ledger that verifies on the host, the agent has neither the key nor the ledger, and
 the capture shows the call, with `api.anthropic.com` the only host let through (and, on a `claude -p` run,
 Claude Code's Datadog telemetry intake among the refused). On a `claude -p` run it also means the hooks
-ledgered allow (read), allow (write under `/work`), deny (delete) in that order and the file is still there.
+ledgered allow (read), allow (write under `/work`), deny (delete) in that order and the file is still there,
+and Claude.Agent.Alerts, reading the copied ledger on the host, raised exactly one error: that deny.
 
 ## Containers
 
@@ -44,6 +45,8 @@ All four sit side by side; this repo finds the others at `../`.
 | `Claude.Agent.Ledger` | PowerShell module, two roles: writer `Add-LedgerEntry -Spool` (agent); keeper `Start-LedgerKeeper`, `New-Ledger` (ledger sidecar); `Get-Ledger`, `Test-Ledger` (host) |
 | `Claude.Agent.Network` | `compose/sidecar.yaml` (mitmproxy, networks `inside`/`outside`) and host-side `ConvertTo-NetworkCapture`, `Get-NetworkCapture` |
 | `Claude.Agent.Policy` | PowerShell module `New-Policy`, `Test-Policy`, `Resolve-PolicyDecision`; `schemas/policy.schema.json`; `hooks/` (pre-tool-use, post-tool-use, settings fragment) |
+| `Claude.Agent.Alerts` | Host-only PowerShell module `Invoke-LedgerAlert`, `Export-LedgerAlert`, `Get-LedgerAlertSummary`, `Test-AlertRule`: rules over the ledger, findings as a GraphNode layer |
+| `Graph.Node` | GraphNode, the `graph/1` envelope shape and validator the alerts layer is written in (read-only reference) |
 
 `vendor/Graph.Emitter.FileSystem/ontology.yaml` is a checked-in copy of that emitter's ontology; the image
 generates its policy from it. Modules prints a warning when the emitter's own copy (`../Graph.Emitter.FileSystem`) differs.
@@ -56,12 +59,13 @@ Docker Desktop (Compose v2.24+), PowerShell 7.4+, `InvokeBuild`, `Pester` 5.5+.
 
 `Invoke-Build` in this repo runs, in order:
 
-1. **Modules**: copy `src/<Module>` of `../Claude.Agent.Ledger`, `../Claude.Agent.Network` and `../Claude.Agent.Policy` into `build/modules/` (fails if a sibling is missing); copy Policy's `schemas/` into its module, and its `hooks/*.ps1` and `hooks/settings.json` into `build/policy/`.
+1. **Modules**: copy `src/<Module>` of `../Claude.Agent.Ledger`, `../Claude.Agent.Network` and `../Claude.Agent.Policy` into `build/modules/` (fails if a sibling is missing); copy Policy's `schemas/` into its module, and its `hooks/*.ps1` and `hooks/settings.json` into `build/policy/`. Copy `../Claude.Agent.Alerts/src/Claude.Agent.Alerts` and `../Graph.Node/src/GraphNode` into `build/host-modules/`, which no image gets (design 7).
 2. **Image**: `docker compose build agent ledger`: the agent (node:22-bookworm-slim, PowerShell 7.4, Claude Code 2.1.295, the three modules) and the keeper (PowerShell 7.4, the ledger module only). The agent build runs `New-Policy` and `Test-Policy` against the vendored ontology and bakes `policy.json`, the hooks, `settings.json` and the ontology at `/opt/agent/policy`, owned by root, directories `0555`, files `0444`.
-3. **Up**: `docker compose up -d`; `mitm` must be healthy and `ledger` started before `agent`; wait for `agent` to exit 0. Prints which run path (run or probe) it took.
+3. **Up**: `docker compose up -d`; `mitm` and `ledger` must be healthy before `agent` (`ledger` is healthy once its start-up seq sync has written `/spool/seq`, design 8); wait for `agent` to exit 0. Prints which run path (run or probe) it took.
 4. **Smoke**: stop `agent`; poll until the keeper has drained `/spool/pending.jsonl` (30 s cap); stop `ledger` (it flushes on SIGTERM; must exit 0) and `mitm` (flushes the capture); copy the ledger volume out with a one-shot container, `Test-Ledger`; check that the agent image has no `key.bin`, the agent container has no `/ledger` mount and sits on `inside` only, and that `inside` is internal with only `agent` and `mitm` on it; convert and read the capture; read the baked policy and its file owners and modes from the image, take the `policy.*` entries from the ledger, and `docker cp` `/work/policy-smoke.txt` out of the stopped agent; write `artifacts/smoke-report.json`, and fail if any fact is missing.
-5. **Down**: `docker compose down` (volumes kept).
-6. **Pester**: `tests/Smoke.Tests.ps1` asserts the report.
+5. **Alerts**: run `Invoke-LedgerAlert` on `artifacts/ledger/ledger.jsonl` from the last `agent.egress-check` on, write `artifacts/alerts/<yyyyMMddTHHmmssZ>.graph.json` (plus `ontology.yaml`) with `Export-LedgerAlert`, check it with `Test-Graph -Strict`, and add `alerts {fromSeq, total, bySeverity, byRule, errors[], findings[], envelope {path, valid, nodes, edges}}` to the report. On a `claude -p` run there must be exactly one error, the smoke delete's `policy.deny`; on a probe run, none.
+6. **Down**: `docker compose down` (volumes kept).
+7. **Pester**: `tests/Smoke.Tests.ps1` asserts the report.
 
 `Invoke-Build Clean` also removes the volumes (spool, ledger, CA, capture) and `build/`, `artifacts/`.
 Each sibling has its own `Invoke-Build` for its unit tests.
@@ -102,5 +106,6 @@ The report's `policy` block holds `rules`, `files` (owner, mode), `decisions[]`,
 | Capture | volume `claude-agent-dev_capture` (`flows.mitm`), never mounted into the agent |
 | Policy | `/opt/agent/policy` in the agent image: `policy.json`, `settings.json`, `hooks/`, `ontology/`; root-owned, read-only |
 | Copies for the host | `artifacts/ledger/ledger.jsonl`, `artifacts/capture.json`, `artifacts/smoke-report.json` (gitignored; the key is deleted after verification) |
+| Alerts layer | `artifacts/alerts/<yyyyMMddTHHmmssZ>.graph.json` and `ontology.yaml` (GraphNode `graph/1`, module `Claude.Agent.Alerts`) |
 
 See [docs/design.md](docs/design.md) for why it is built this way.
