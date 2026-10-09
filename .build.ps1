@@ -338,7 +338,7 @@ task Alerts {
             })
         findings   = @($findings | ForEach-Object { [ordered]@{ id = $_.id; severity = $_.severity; kind = $_.kind; detail = $_.detail } })
         envelope   = [ordered]@{
-            path  = [System.IO.Path]::GetRelativePath($BuildRoot, $file.FullName) -replace '\', '/'
+            path  = [System.IO.Path]::GetRelativePath($BuildRoot, $file.FullName).Replace('\', '/')
             valid = $check.Valid
             nodes = $graph.counts.nodes
             edges = $graph.counts.edges
