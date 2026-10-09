@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../Claude.Agent.Network"
+		},
+		{
+			"path": "../Claude.Agent.Policy"
 		}
 	],
 	"settings": {}
