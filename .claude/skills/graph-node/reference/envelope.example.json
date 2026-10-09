@@ -1,0 +1,28 @@
+{
+  "schema": "graph/1",
+  "ontology": "ontology.yaml",
+  "module": "Example",
+  "version": "0.2.0",
+  "layer": "2026-10-08T00:00:00Z",
+  "root": "vnet:a",
+  "nodes": [
+    { "id": "vnet:a", "kind": "VNet", "name": "vnet-a", "properties": { "cidr": "10.0.0.0/16" },
+      "source": [ { "tool": "az", "command": "az network vnet show -n vnet-a" } ],
+      "stamp": { "layer": "2026-10-08T00:00:00Z" } },
+    { "id": "snet:a", "kind": "Subnet", "name": "snet-a", "properties": { "cidr": "10.0.1.0/24" } },
+    { "id": "vm:a", "kind": "VM", "name": "vm-a" },
+    { "id": "run:1", "kind": "ActionRun", "name": "Subnet.attach",
+      "properties": { "action": "Subnet.attach", "startedAt": "2026-10-08T00:00:01Z", "finishedAt": "2026-10-08T00:00:02Z", "status": "succeeded", "actor": "agent:claude",
+                      "inputs": { "vm": "vm:a", "primary": true }, "result": "nic:a" } }
+  ],
+  "edges": [
+    { "id": "vnet:a|snet:a|contains", "kind": "contains", "from": "vnet:a", "to": "snet:a" },
+    { "id": "vm:a|snet:a|on", "kind": "on", "from": "vm:a", "to": "snet:a", "properties": { "nic": "nic-a" } },
+    { "id": "run:1|vm:a|performed-on", "kind": "performed-on", "from": "run:1", "to": "vm:a" },
+    { "id": "run:1|snet:a|performed-on", "kind": "performed-on", "from": "run:1", "to": "snet:a" }
+  ],
+  "findings": [
+    { "kind": "unused-subnet", "severity": "info", "message": "snet-a has one attachment", "target": "snet:a" }
+  ],
+  "counts": { "nodes": 4, "edges": 4, "byKind": { "VNet": 1, "Subnet": 1, "VM": 1, "ActionRun": 1 } }
+}

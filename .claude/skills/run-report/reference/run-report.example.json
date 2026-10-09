@@ -1,0 +1,510 @@
+{
+  "schema": "graph/1",
+  "ontology": "ontology.yaml",
+  "module": "Graph.RunReport",
+  "version": "0.2.3",
+  "layer": "2026-10-09T02:18:56Z",
+  "root": "run:Graph:2026-10-09T02:12:45Z",
+  "nodes": [
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z",
+      "kind": "Run",
+      "name": "Graph 0.2.3: run-report skill decoupled from Graph's version; Show-GraphRenderer",
+      "properties": {
+        "task": "0.2.3: run-report skill decoupled from Graph's version; Show-GraphRenderer",
+        "buildResult": "succeeded",
+        "pesterSkipped": 4,
+        "pesterPassed": 82,
+        "repo": "C:/__Code/Graph",
+        "finishedAt": "2026-10-09T02:18:56Z",
+        "startedAt": "2026-10-09T02:12:45Z",
+        "pesterFailed": 0
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "finding:1",
+      "kind": "Finding",
+      "name": "The version-match test reads 0.2.1 from the version: fron...",
+      "properties": {
+        "text": "The version-match test reads 0.2.1 from the version: front matter of Graph's .claude/skills/run-report/SKILL.md and is green for Graph.Node, Graph.Emitter.FileSystem, Graph.Emitter.Network, Graph.Emitter.Terraform and Graph.Emitter.AzureDevOps, each at 0.2.1, none touched (git status clean in all five).",
+        "severity": "info"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "finding:2",
+      "kind": "Finding",
+      "name": "The first Pester run and the first full Invoke-Build fail...",
+      "properties": {
+        "text": "The first Pester run and the first full Invoke-Build failed one test, artifacts/run-report.json every Touched path exists: the 0.2.2 report listed src/Graph/Public/Show-GraphPortal.ps1, which this rename removed. The failed chain rewrote the report and the second chain and Pester were green. Any rename or delete trips this until the report is rewritten; worth making the test skip a report older than HEAD.",
+        "severity": "warn"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "finding:3",
+      "kind": "Finding",
+      "name": "GraphRenderer exports its own Show-GraphRenderer, the sam...",
+      "properties": {
+        "text": "GraphRenderer exports its own Show-GraphRenderer, the same name collision as Start and Stop in 0.2.2. Graph never calls it; a test asserts Show-GraphRenderer resolves to module Graph after import (design.md 8).",
+        "severity": "warn"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "finding:4",
+      "kind": "Finding",
+      "name": "The five sibling copies match Graph's copy in version but...",
+      "properties": {
+        "text": "The five sibling copies match Graph's copy in version but not word for word: they still say Start-GraphPortal in What it is and lack the 0.2.3 Changes line. By design.md 9 that waits for their next recopy.",
+        "severity": "info"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "finding:5",
+      "kind": "Finding",
+      "name": "C:\\__Code\\Portal, which is not in Graph.code-workspace, h...",
+      "properties": {
+        "text": "C:\\__Code\\Portal, which is not in Graph.code-workspace, holds a run-report copy at 0.2.2. It is not a sibling, so it is not tested; it would fail if it joined the workspace.",
+        "severity": "info"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "finding:6",
+      "kind": "Finding",
+      "name": "Renamed, so not Touched: src/Graph/Public/Show-GraphPorta...",
+      "properties": {
+        "text": "Renamed, so not Touched: src/Graph/Public/Show-GraphPortal.ps1 and tests/Show-GraphPortal.Tests.ps1 (git mv to the Show-GraphRenderer names).",
+        "severity": "info"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "finding:7",
+      "kind": "Finding",
+      "name": "The default chain left the portal running on http://127.0...",
+      "properties": {
+        "text": "The default chain left the portal running on http://127.0.0.1:8100/ (process 174984) and opened the browser; Invoke-Build Down stops it.",
+        "severity": "info"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "decision:1",
+      "kind": "Decision",
+      "name": "The version-match test is one Pester case per sibling fro...",
+      "properties": {
+        "text": "The version-match test is one Pester case per sibling from Get-GraphSibling (Graph excluded), skipped with a reason when the sibling has no copy: GraphRenderer, Graph.Emitter.Git.Repository, Graph.Emitter.Agent and Graph.Emitter.Reference account for the 4 skips.",
+        "revisit": false
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "decision:2",
+      "kind": "Decision",
+      "name": "The skill's version went back to 0.2.1 but its 0.2.2 word...",
+      "properties": {
+        "text": "The skill's version went back to 0.2.1 but its 0.2.2 wording (Start-GraphRenderer) stayed, and its Changes line says so.",
+        "revisit": false
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "decision:3",
+      "kind": "Decision",
+      "name": "No run-report.example.0.2.0.json: the tests read only the...",
+      "properties": {
+        "text": "No run-report.example.0.2.0.json: the tests read only the example's general shape (Test-Graph -Strict, one Run node), so the example was replaced by this run's report.",
+        "revisit": false
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "decision:4",
+      "kind": "Decision",
+      "name": "CHANGELOG 0.2.3 is dated 2026-10-09, the UTC date, like t...",
+      "properties": {
+        "text": "CHANGELOG 0.2.3 is dated 2026-10-09, the UTC date, like the 0.2.1 and 0.2.2 entries.",
+        "revisit": false
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "notrun:1",
+      "kind": "NotRun",
+      "name": "manual check list items (3.1 now calls Show-GraphRenderer...",
+      "properties": {
+        "text": "manual check list items (3.1 now calls Show-GraphRenderer); its Verified for line still says 0.2.2",
+        "reason": "not asked; the text was updated, the items were not rerun"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:.build.ps1",
+      "kind": "Touched",
+      "name": ".build.ps1",
+      "properties": {
+        "staged": true,
+        "path": ".build.ps1"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:.claude/skills/manual-check-list/SKILL.md",
+      "kind": "Touched",
+      "name": ".claude/skills/manual-check-list/SKILL.md",
+      "properties": {
+        "staged": true,
+        "path": ".claude/skills/manual-check-list/SKILL.md"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:.claude/skills/run-report/SKILL.md",
+      "kind": "Touched",
+      "name": ".claude/skills/run-report/SKILL.md",
+      "properties": {
+        "staged": true,
+        "path": ".claude/skills/run-report/SKILL.md"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:.claude/skills/run-report/reference/run-report.example.json",
+      "kind": "Touched",
+      "name": ".claude/skills/run-report/reference/run-report.example.json",
+      "properties": {
+        "staged": true,
+        "path": ".claude/skills/run-report/reference/run-report.example.json"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:CHANGELOG.md",
+      "kind": "Touched",
+      "name": "CHANGELOG.md",
+      "properties": {
+        "staged": true,
+        "path": "CHANGELOG.md"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:CLAUDE.md",
+      "kind": "Touched",
+      "name": "CLAUDE.md",
+      "properties": {
+        "staged": true,
+        "path": "CLAUDE.md"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:README.md",
+      "kind": "Touched",
+      "name": "README.md",
+      "properties": {
+        "staged": true,
+        "path": "README.md"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:docs/design.md",
+      "kind": "Touched",
+      "name": "docs/design.md",
+      "properties": {
+        "staged": true,
+        "path": "docs/design.md"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:docs/manual-check-list.md",
+      "kind": "Touched",
+      "name": "docs/manual-check-list.md",
+      "properties": {
+        "staged": true,
+        "path": "docs/manual-check-list.md"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:src/Graph/Graph.psd1",
+      "kind": "Touched",
+      "name": "src/Graph/Graph.psd1",
+      "properties": {
+        "staged": true,
+        "path": "src/Graph/Graph.psd1"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:src/Graph/Graph.psm1",
+      "kind": "Touched",
+      "name": "src/Graph/Graph.psm1",
+      "properties": {
+        "staged": true,
+        "path": "src/Graph/Graph.psm1"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:src/Graph/Public/Show-GraphRenderer.ps1",
+      "kind": "Touched",
+      "name": "src/Graph/Public/Show-GraphRenderer.ps1",
+      "properties": {
+        "staged": true,
+        "path": "src/Graph/Public/Show-GraphRenderer.ps1"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:tests/Module.Tests.ps1",
+      "kind": "Touched",
+      "name": "tests/Module.Tests.ps1",
+      "properties": {
+        "staged": true,
+        "path": "tests/Module.Tests.ps1"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    },
+    {
+      "id": "touched:tests/Show-GraphRenderer.Tests.ps1",
+      "kind": "Touched",
+      "name": "tests/Show-GraphRenderer.Tests.ps1",
+      "properties": {
+        "staged": true,
+        "path": "tests/Show-GraphRenderer.Tests.ps1"
+      },
+      "stamp": {
+        "layer": "2026-10-09T02:18:56Z"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|finding:1|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "finding:1"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|finding:2|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "finding:2"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|finding:3|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "finding:3"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|finding:4|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "finding:4"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|finding:5|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "finding:5"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|finding:6|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "finding:6"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|finding:7|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "finding:7"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|decision:1|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "decision:1"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|decision:2|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "decision:2"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|decision:3|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "decision:3"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|decision:4|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "decision:4"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|notrun:1|reports",
+      "kind": "reports",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "notrun:1"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:.build.ps1|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:.build.ps1"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:.claude/skills/manual-check-list/SKILL.md|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:.claude/skills/manual-check-list/SKILL.md"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:.claude/skills/run-report/SKILL.md|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:.claude/skills/run-report/SKILL.md"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:.claude/skills/run-report/reference/run-report.example.json|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:.claude/skills/run-report/reference/run-report.example.json"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:CHANGELOG.md|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:CHANGELOG.md"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:CLAUDE.md|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:CLAUDE.md"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:README.md|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:README.md"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:docs/design.md|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:docs/design.md"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:docs/manual-check-list.md|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:docs/manual-check-list.md"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:src/Graph/Graph.psd1|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:src/Graph/Graph.psd1"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:src/Graph/Graph.psm1|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:src/Graph/Graph.psm1"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:src/Graph/Public/Show-GraphRenderer.ps1|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:src/Graph/Public/Show-GraphRenderer.ps1"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:tests/Module.Tests.ps1|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:tests/Module.Tests.ps1"
+    },
+    {
+      "id": "run:Graph:2026-10-09T02:12:45Z|touched:tests/Show-GraphRenderer.Tests.ps1|touched",
+      "kind": "touched",
+      "from": "run:Graph:2026-10-09T02:12:45Z",
+      "to": "touched:tests/Show-GraphRenderer.Tests.ps1"
+    }
+  ],
+  "findings": [],
+  "counts": {
+    "nodes": 27,
+    "edges": 26,
+    "byKind": {
+      "Run": 1,
+      "Finding": 7,
+      "Decision": 4,
+      "NotRun": 1,
+      "Touched": 14
+    }
+  }
+}

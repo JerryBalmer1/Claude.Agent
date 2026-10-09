@@ -121,3 +121,36 @@ For these two settings `.env` wins over the environment, then the defaults in `.
 opposite of Compose's own order (shell over `.env`), and deliberate: they describe the checkout, so a stray
 shell variable should not quietly move the build to another project. Credentials keep Compose's order
 (Test-CredentialPresent), because there the shell overriding `.env` is the documented way to run without a file.
+
+## 10. The run itself is a layer too
+
+`smoke-report.json` is this repo's own record; the portal reads Graph.Node envelopes. So after each build the
+Runs task also writes the run as a run-report layer, in the shape Graph's run-report skill defines (copied into
+`.claude/skills/run-report`, read-only here): `artifacts/runs/<layer stamp>.graph.json`, a copy at
+`artifacts/runs/latest.graph.json` (a copy, not a link, as for the alerts layer), and the
+run-report `ontology.yaml` beside them. `smoke-report.json` is untouched; the layer is derived from it.
+
+What goes where:
+
+| Kind | From |
+| --- | --- |
+| Run | repo, the invocation, start (Invoke-Build's own start) and finish, tasks completed, Pester totals, image name and size, auth path, project, `alertsLayer` |
+| Finding | each Finding in the alerts layer (the rule's severity), then the egress check (info when blocked, error otherwise), then the published-port check (info, or error on a stray port) |
+| Decision | the auth path, and for each image whether `docker compose build` reused it from cache, rebuilt it, or was not run |
+| NotRun | each chain task this invocation did not run, and the Pester tests skipped for the other run path |
+| Touched | every file under `artifacts/` and, when Modules ran, `build/modules`, `build/policy`, `build/host-modules`; never staged, both are gitignored |
+
+Edges follow the ontology: Run `reports` Finding, Decision and NotRun, and Run `touched` Touched (the ontology
+has no `reports` edge to Touched).
+
+Runs is the last task, after Pester, not straight after Smoke: the ontology requires the Run's Pester totals, and
+the Run links the alerts layer, which the Alerts task writes after Smoke. Pester leaves its totals in
+`artifacts/pester.json`. The cost: when an earlier task fails, the build stops and no run report is written for that
+build. The Pester tests cannot read a layer written after them, so `tests/RunReport.Tests.ps1` builds one in a
+scratch directory from the same run's artifacts with the same function (`tools/RunReport.ps1`). The Runs task
+itself fails unless `graphnode validate --ontology` prints `[]` for both files.
+
+Cross-link without an edge: the Run's `properties.alertsLayer` is the alerts layer's `layer` stamp. An edge to a
+Finding in the alerts layer would dangle in this envelope (and `alert:` belongs to Claude.Agent.Alerts), so the
+join is left to the portal, which mounts both layers. The envelope's `version` is the run-report ontology's
+(0.2.1), because the module it declares is Graph.RunReport, not Claude.Agent.

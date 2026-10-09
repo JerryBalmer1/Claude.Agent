@@ -1,0 +1,53 @@
+module: Graph.RunReport
+version: 0.2.1
+kinds:
+  Run:
+    description: One agent task or one Invoke-Build run in a repo of the graph family. The root of the report.
+    idRule: "run:<repo folder name>:<startedAt>"
+    properties:
+      - { name: repo, type: string, required: true, description: "Absolute path of the repo the task ran in, forward slashes." }
+      - { name: task, type: string, required: true, description: "The task as asked, or the Invoke-Build tasks run." }
+      - { name: startedAt, type: string, required: true, description: UTC stamp ending Z. }
+      - { name: finishedAt, type: string, required: true, description: UTC stamp ending Z. }
+      - { name: buildResult, type: string, required: true, description: "succeeded, failed or not-run." }
+      - { name: pesterPassed, type: integer, required: true }
+      - { name: pesterFailed, type: integer, required: true }
+      - { name: pesterSkipped, type: integer, required: true }
+    display: { color: "#4a6fa5", shape: square, label: "{name}" }
+  Finding:
+    description: Something worth a second look, one bullet of the prose report.
+    idRule: "finding:<n>, in report order from 1"
+    properties:
+      - { name: text, type: string, required: true }
+      - { name: severity, type: string, required: true, description: "info, warn or error." }
+    display: { color: "#d9822b", shape: circle, label: "{name}" }
+  Decision:
+    description: A choice the agent made without asking, one bullet of the prose report.
+    idRule: "decision:<n>, in report order from 1"
+    properties:
+      - { name: text, type: string, required: true }
+      - { name: revisit, type: boolean, required: true, description: True when Jerry should reconsider it. }
+    display: { color: "#5b9a68", shape: diamond, label: "{name}" }
+  NotRun:
+    description: Something asked for or expected that did not run, one bullet of the prose report.
+    idRule: "notrun:<n>, in report order from 1"
+    properties:
+      - { name: text, type: string, required: true }
+      - { name: reason, type: string, required: true }
+    display: { color: "#b5485d", shape: hexagon, label: "{name}" }
+  Touched:
+    description: A file the task created, changed or deleted, relative to the Run's repo.
+    idRule: "touched:<path relative to repo, forward slashes>"
+    properties:
+      - { name: path, type: string, required: true }
+      - { name: staged, type: boolean, required: true }
+    display: { color: "#8a8a8a", shape: square, label: "{name}" }
+edgeKinds:
+  reports:
+    description: The Run reports a Finding, Decision or NotRun.
+    from: [Run]
+    to: [Finding, Decision, NotRun]
+  touched:
+    description: The Run touched a file.
+    from: [Run]
+    to: [Touched]

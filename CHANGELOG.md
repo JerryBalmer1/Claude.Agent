@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.3 - 2026-10-09
+
+- Run report: a new Runs task, last in the chain (after Pester, whose totals the Run node needs), writes the run as
+  a Graph.RunReport layer, `artifacts/runs/<layer stamp>.graph.json` plus `artifacts/runs/latest.graph.json` (a
+  copy) and `ontology.yaml`, beside the unchanged `smoke-report.json` (design 10). One Run (repo, task, start and
+  finish, tasks run, Pester totals, image size, auth path, `alertsLayer`); a Finding per alert (the rule's
+  severity), for the egress check and for the published-port check; Decisions for the auth path and for each
+  image's reuse; a NotRun per chain task the invocation skipped and for skipped Pester tests; a Touched per file
+  written. Run `reports` Finding, Decision and NotRun, Run `touched` Touched, as the run-report ontology declares.
+  The task fails unless `graphnode validate --ontology` prints `[]` for both files. Builder: `tools/RunReport.ps1`.
+- Cross-link: the Run carries `properties.alertsLayer`, the alerts layer's stamp (0.4.2), so the portal can mount
+  both layers and join them. No edge crosses envelopes.
+- Skills: `.claude/skills/run-report` (from Graph, 0.2.1) and `.claude/skills/graph-node` (from Graph.Node, 0.2.1),
+  unchanged copies; `tests/Skills.Tests.ps1` checks each version against its source and that the files are identical.
+- `tests/Invoke-Tests.ps1` writes `artifacts/pester.json` (passed, failed, skipped) and exits non-zero on any
+  failure, as before. `tests/RunReport.Tests.ps1` builds a run report from the run's own artifacts and checks it.
+- CHANGELOG: the old Unreleased section is split into the dated releases it shipped in.
+
 ## 0.4.2 - 2026-10-09
 
 - Port: host port `CLAUDE_AGENT_PORT` (default 8300, `.env.example`) is reserved for an Alerts/Ledger API and
@@ -15,7 +33,12 @@
   `graphnode validate --ontology` on both against Claude.Agent.Alerts' shipped `ontology.yaml` and requires `[]`;
   the report's `alerts.envelope` gains `latest`, `latestIsNewest`, `ontology`, `validate[]`.
 
-## Unreleased
+## 0.4.1 - 2026-10-08
+
+- Alerts task: the envelope path in the report is made with `.Replace('\', '/')`; the `-replace '\', '/'` it
+  replaced is an invalid regex and failed the task on every run.
+
+## 0.4.0 - 2026-10-08
 
 - Alerts (design 7): Modules copies the fifth sibling, Claude.Agent.Alerts, and Graph.Node's GraphNode into
   `build/host-modules/` (in `.dockerignore`; no image gets them). A new Alerts task after Smoke runs
@@ -30,6 +53,8 @@
   `service_healthy` instead of `service_started`, so the keeper's seq sync is done before the agent writes.
 - Clean also removes `build/policy` and `build/host-modules`.
 
+## 0.3.0 - 2026-10-08
+
 - Tool policy (Claude.Agent.Policy, design 6): Modules copies the fourth sibling; the image generates
   `policy.json` from `vendor/Graph.Emitter.FileSystem/ontology.yaml` with `New-Policy`, checks it with
   `Test-Policy`, and bakes it with the hooks and `settings.json` root-owned and read-only at `/opt/agent/policy`.
@@ -41,10 +66,14 @@
 - The `ok` check now requires the reply's last line to be `ok`. It used to match `ok` anywhere, and so passed
   a reply that said it was not replying ok.
 
+## 0.2.2 - 2026-10-08
+
 - Egress allowlist (Claude.Agent.Network design 4): the sidecar forwards only `api.anthropic.com` and refuses and
   records everything else. Smoke asserts the capture's allowed hosts are exactly `api.anthropic.com` and, on a
   `claude -p` run, that `http-intake.logs.us5.datadoghq.com` is among the refused. The report's `capture` gains
   `allowedHosts`, `refusedHosts`, `summary {allowed, refused, refusedHosts}` and `refused` (the refused flows).
+
+## 0.2.1 - 2026-10-08
 
 - No route out but the sidecar: the agent is on the internal `inside` network only (networks come from
   Claude.Agent.Network's fragment). The entrypoint ledgers `agent.egress-check {directBlocked}` from a direct

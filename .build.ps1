@@ -2,7 +2,7 @@
 .SYNOPSIS
 End-to-end build for Claude.Agent (Invoke-Build).
 .DESCRIPTION
-Default chain: Modules, Image, Up, Smoke, Alerts, Down, Pester. Status is on its own.
+Default chain: Modules, Image, Up, Smoke, Alerts, Down, Pester, Runs. Status is on its own.
 Project name and reserved port: -Project / -Port, else COMPOSE_PROJECT_NAME / CLAUDE_AGENT_PORT from .env, else
 from the environment, else claude-agent-dev / 8300 (.env.example). Every docker compose call gets both (design 9).
 Assumes the sibling repos Claude.Agent.Ledger, Claude.Agent.Network, Claude.Agent.Policy and Claude.Agent.Alerts,
@@ -76,6 +76,10 @@ $Artifacts = Join-Path $BuildRoot 'artifacts'
 $VendoredOntology = Join-Path $BuildRoot 'vendor/Graph.Emitter.FileSystem/ontology.yaml'
 # The prompt in entrypoint.ps1 writes this file and then tries to delete it; the policy must keep it.
 $PolicySmokeFile = '/work/policy-smoke.txt'
+# Graph.Node's CLI, as Modules copied it, and the run-report ontology from the copied run-report skill (design 10).
+$GraphNodeExe = Join-Path $HostModulesDir ('GraphNode/bin/' + $(if ($IsWindows) { 'win-x64/graphnode.exe' } else { 'linux-x64/graphnode' }))
+$RunReportOntology = Join-Path $BuildRoot '.claude/skills/run-report/reference/ontology.yaml'
+$ChainTasks = 'Modules', 'Image', 'Up', 'Smoke', 'Alerts', 'Down', 'Pester'
 
 # True when Compose will hand the agent a non-empty $Name: from the shell environment, else from .env
 # (the same precedence as Compose interpolation). Only presence is checked; no value is printed, stored or written.
@@ -387,11 +391,10 @@ task Alerts {
     $newest = Get-ChildItem -LiteralPath $alertsDir -Filter '*.graph.json' | Where-Object Name -ne 'latest.graph.json' | Sort-Object Name | Select-Object -Last 1
     Copy-Item -LiteralPath $newest.FullName -Destination $latest -Force
     # Graph.Node's own CLI, checked against the ontology Claude.Agent.Alerts ships (as copied by Modules).
-    $graphnode = Join-Path $HostModulesDir ('GraphNode/bin/' + $(if ($IsWindows) { 'win-x64/graphnode.exe' } else { 'linux-x64/graphnode' }))
-    assert (Test-Path -LiteralPath $graphnode) "no graphnode binary at $graphnode; build it in ../Graph.Node (Invoke-Build Build)"
+    assert (Test-Path -LiteralPath $GraphNodeExe) "no graphnode binary at $GraphNodeExe; build it in ../Graph.Node (Invoke-Build Build)"
     $shippedOntology = Join-Path $HostModulesDir 'Claude.Agent.Alerts/ontology.yaml'
     $validate = foreach ($target in $file.FullName, $latest) {
-        $out = & $graphnode validate $target --ontology $shippedOntology
+        $out = & $GraphNodeExe validate $target --ontology $shippedOntology
         [ordered]@{
             path     = [System.IO.Path]::GetRelativePath($BuildRoot, $target).Replace('\', '/')
             exitCode = $LASTEXITCODE
@@ -480,4 +483,55 @@ task Clean {
     remove $ModulesDir, $PolicyDir, $HostModulesDir, $Artifacts
 }
 
-task . Modules, Image, Up, Smoke, Alerts, Down, Pester
+# Synopsis: Write the smoke run as a run-report layer, artifacts/runs/<stamp>.graph.json and latest.graph.json; require graphnode validate --ontology to print [].
+task Runs {
+    $reportPath = Join-Path $Artifacts 'smoke-report.json'
+    $alertsLatest = Join-Path $Artifacts 'alerts/latest.graph.json'
+    assert (Test-Path $reportPath) "no $reportPath; run Smoke first"
+    assert (Test-Path $alertsLatest) "no $alertsLatest; run Alerts first"
+    assert (Test-Path -LiteralPath $GraphNodeExe) "no graphnode binary at $GraphNodeExe; build it in ../Graph.Node (Invoke-Build Build)"
+    Import-Module (Join-Path $HostModulesDir 'GraphNode') -Force
+    . (Join-Path $BuildRoot 'tools/RunReport.ps1')
+
+    $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json -AsHashtable -DateKind String
+    # Tasks completed in this invocation, in order (Runs itself is still running, so it is not among them).
+    $done = @(${*}.Tasks | ForEach-Object Name)
+    $pesterFile = Join-Path $Artifacts 'pester.json'
+    $pester = if ($done -contains 'Pester' -and (Test-Path $pesterFile)) { Get-Content -LiteralPath $pesterFile -Raw | ConvertFrom-Json } else { $null }
+
+    # Image reuse: a compose build that rebuilt nothing leaves the image's Created before the Image task started.
+    $imageTask = ${*}.Tasks | Where-Object Name -eq 'Image' | Select-Object -First 1
+    $imageDecision = foreach ($img in $ImageName, $LedgerImageName) {
+        # Docker gives nanoseconds; .NET parses at most seven fractional digits.
+        $createdRaw = (exec { docker image inspect $img --format '{{.Created}}' }) -replace '(\.\d{7})\d+', '$1'
+        $created = [datetime]::Parse($createdRaw, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal)
+        $createdText = $created.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        if (-not $imageTask) { "image ${img}: used as it was (created $createdText); the Image task did not run" }
+        elseif ($created -lt $imageTask.Started.ToUniversalTime()) { "image ${img}: reused from the build cache (created $createdText, before this build); docker compose build changed nothing" }
+        else { "image ${img}: rebuilt by this build (created $createdText)" }
+    }
+
+    # Files this run wrote: everything under artifacts/ (it is recreated by Smoke), and build/ when Modules ran.
+    $touched = @(Get-ChildItem -LiteralPath $Artifacts -Recurse -File | Where-Object { $_.FullName -notlike (Join-Path $Artifacts 'runs*') } |
+        ForEach-Object { [System.IO.Path]::GetRelativePath($BuildRoot, $_.FullName).Replace('\', '/') } | Sort-Object)
+    if ($done -contains 'Modules') { $touched += 'build/modules', 'build/policy', 'build/host-modules' }
+
+    $runsDir = Join-Path $Artifacts 'runs'
+    $file = New-SmokeRunReport -Report $report -AlertsEnvelopePath $alertsLatest -RepoRoot $BuildRoot `
+        -Task "Invoke-Build $($BuildTask -join ', ')" -StartedAt ${*}.Started -FinishedAt ([datetime]::UtcNow) `
+        -TasksRun $done -ChainTasks $ChainTasks -ImageDecision @($imageDecision) -Pester $pester -Touched $touched `
+        -OutDir $runsDir -OntologyPath $RunReportOntology
+
+    $latest = Join-Path $runsDir 'latest.graph.json'
+    $graph = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+    print Cyan "run report: $([System.IO.Path]::GetRelativePath($BuildRoot, $file.FullName).Replace('\', '/')) ($($graph.counts.nodes) nodes, $($graph.counts.edges) edges; $(($graph.counts.byKind.PSObject.Properties | ForEach-Object { "$($_.Name) $($_.Value)" }) -join ', '))"
+    foreach ($target in $file.FullName, $latest) {
+        $out = (& $GraphNodeExe validate $target --ontology $RunReportOntology) -join "`n"
+        $code = $LASTEXITCODE
+        print Cyan "graphnode validate --ontology $([System.IO.Path]::GetRelativePath($BuildRoot, $target).Replace('\', '/')): $($out.Trim()) (exit $code)"
+        assert ($code -eq 0 -and ($out -replace '\s', '') -eq '[]') "run report $target does not validate: exit ${code}: $out"
+    }
+    assert ((Get-FileHash -LiteralPath $latest).Hash -eq (Get-FileHash -LiteralPath $file.FullName).Hash) 'runs/latest.graph.json is not the layer just written'
+}
+
+task . Modules, Image, Up, Smoke, Alerts, Down, Pester, Runs

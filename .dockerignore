@@ -8,3 +8,5 @@ artifacts
 tests
 docs
 *.md
+tools
+.claude
