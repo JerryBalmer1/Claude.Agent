@@ -135,7 +135,10 @@ task Smoke {
     $captureJson = Join-Path $Artifacts 'capture.json'
     ConvertTo-NetworkCapture -Volume "${Project}_capture" -FlowsPath 'flows.mitm' -OutPath $captureJson | Out-Null
     $flows = @(Get-NetworkCapture -Path $captureJson)
+    $captureSummary = Get-NetworkCapture -Path $captureJson -Summary
+    $allowedHosts = @($flows | Where-Object { -not $_.refused } | ForEach-Object host | Sort-Object -Unique)
     $anthropic = @($flows | Where-Object host -eq 'api.anthropic.com')
+    $datadogIntake = 'http-intake.logs.us5.datadoghq.com'
 
     $imageSize = [long](exec { docker image inspect $ImageName --format '{{.Size}}' })
 
@@ -174,7 +177,15 @@ task Smoke {
             flows          = $flows.Count
             anthropicFlows = $anthropic.Count
             hosts          = @($flows.host | Sort-Object -Unique)
-            anthropic      = @($anthropic | Select-Object method, host, path, status, requestBytes, responseBytes, started)
+            allowedHosts   = $allowedHosts
+            refusedHosts   = @($captureSummary.refusedHosts)
+            summary        = [ordered]@{
+                allowed      = $captureSummary.allowed
+                refused      = $captureSummary.refused
+                refusedHosts = @($captureSummary.refusedHosts)
+            }
+            refused        = @($flows | Where-Object refused | Select-Object method, host, path, status, started)
+            anthropic      = @($anthropic | Select-Object method, host, path, status, requestBytes, responseBytes, started, refused)
         }
     }
     $reportPath = Join-Path $Artifacts 'smoke-report.json'
@@ -203,6 +214,12 @@ task Smoke {
         assert ($outcome.kind -eq 'agent.probe') "no credential is present but the last run was $($outcome.kind)"
     }
     assert ($anthropic.Count -ge 1) "no flow to api.anthropic.com in the capture (hosts: $($flows.host -join ', '))"
+    # Egress allowlist (Claude.Agent.Network design 4): only api.anthropic.com gets through; the rest is refused and recorded.
+    assert (($allowedHosts -join ',') -eq 'api.anthropic.com') "allowed hosts: $($allowedHosts -join ', ')"
+    if ($auth) {
+        # Claude Code's telemetry; the probe path runs only curl, so there is nothing to refuse there.
+        assert ($report.capture.refusedHosts -contains $datadogIntake) "$datadogIntake not among refused hosts: $($report.capture.refusedHosts -join ', ')"
+    }
 }
 
 # Synopsis: Stop and remove containers; volumes are kept.

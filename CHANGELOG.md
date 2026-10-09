@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Egress allowlist (Claude.Agent.Network design 4): the sidecar forwards only `api.anthropic.com` and refuses and
+  records everything else. Smoke asserts the capture's allowed hosts are exactly `api.anthropic.com` and, on a
+  `claude -p` run, that `http-intake.logs.us5.datadoghq.com` is among the refused. The report's `capture` gains
+  `allowedHosts`, `refusedHosts`, `summary {allowed, refused, refusedHosts}` and `refused` (the refused flows).
+
 - No route out but the sidecar: the agent is on the internal `inside` network only (networks come from
   Claude.Agent.Network's fragment). The entrypoint ledgers `agent.egress-check {directBlocked}` from a direct
   `curl --noproxy '*'` before `agent.start` and exits 3 if it was not blocked.

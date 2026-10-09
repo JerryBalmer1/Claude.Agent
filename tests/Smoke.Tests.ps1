@@ -99,5 +99,21 @@ Describe 'Smoke report' {
         It 'saw the response, not just the tunnel' {
             @($report.capture.anthropic | Where-Object status).Count | Should -BeGreaterOrEqual 1
         }
+
+        It 'let only api.anthropic.com through the allowlist' {
+            @($report.capture.allowedHosts) | Should -Be @('api.anthropic.com')
+            @($report.capture.anthropic | Where-Object refused) | Should -HaveCount 0
+        }
+
+        It 'has a summary that matches the flows' {
+            $report.capture.summary.allowed + $report.capture.summary.refused | Should -Be $report.capture.flows
+            $report.capture.summary.refused | Should -Be @($report.capture.refused).Count
+            @($report.capture.summary.refusedHosts) | Should -Be @($report.capture.refusedHosts)
+        }
+
+        It 'refused and recorded Claude Code telemetry to Datadog' -Skip:(-not $hasAuth) {
+            $report.capture.refusedHosts | Should -Contain 'http-intake.logs.us5.datadoghq.com'
+            @($report.capture.refused | Where-Object host -eq 'http-intake.logs.us5.datadoghq.com').status | Should -Contain 403
+        }
     }
 }

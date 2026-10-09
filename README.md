@@ -7,11 +7,13 @@ the whole thing works end to end:
   cannot reach chains and HMACs them with a key the agent never holds, and
 - a **network capture** the agent cannot touch: the agent sits on an internal network whose only way out is
   the mitmproxy sidecar, so every request goes through it whether or not the agent honours its proxy settings.
+  The sidecar forwards only `api.anthropic.com`; any other host is refused with a 403 and recorded as refused.
 
 A green `Invoke-Build` means: both images build, the agent cannot reach the internet directly, it reaches
 `api.anthropic.com` through the proxy (a real `claude -p` with a key, a `curl` probe without), the keeper
 drains the spool into a ledger that verifies on the host, the agent has neither the key nor the ledger, and
-the capture shows the call.
+the capture shows the call, with `api.anthropic.com` the only host let through (and, on a `claude -p` run,
+Claude Code's Datadog telemetry intake among the refused).
 
 ## Containers
 
