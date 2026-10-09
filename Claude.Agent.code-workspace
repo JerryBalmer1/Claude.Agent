@@ -14,6 +14,9 @@
 		},
 		{
 			"path": "../Claude.Agent.Alerts"
+		},
+		{
+			"path": "../Claude.Agent.Runner"
 		}
 	],
 	"settings": {}

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.4 - 2026-10-08
+
+- 0.4.4: git-guard hook; run-report 0.2.2; graph-node 0.2.1
+- Skills git-guard 0.1.0, run-report 0.2.2 and graph-node 0.2.1 copied from Graph HEAD; git-guard's PreToolUse hook merged into `.claude/settings.json`. `tests/Skills.Tests.ps1` checks each copy's version and full text against `git show HEAD:` in Graph, and the hook's exit codes (0, 0, 2, 2, 2, 2 for git status, git add, git commit, git push, git tag, gh pr merge).
+- CLAUDE.md: the three skills are copies of Graph HEAD (graph-node was listed as from Graph.Node).
+
 ## 0.4.3 - 2026-10-09
 
 - Run report: a new Runs task, last in the chain (after Pester, whose totals the Run node needs), writes the run as
