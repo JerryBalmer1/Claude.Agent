@@ -1,0 +1,44 @@
+module: Graph.Emitter.FileSystem
+version: 0.1.0
+kinds:
+  Directory:
+    description: A directory under the walked root. The root itself is the Directory with id fs:. and records its absolute path in source.
+    idRule: "fs:<path relative to root, forward slashes>; the root is fs:."
+    properties:
+      - { name: name, type: string, required: true }
+      - { name: modifiedAt, type: string, required: true, description: UTC stamp ending Z. }
+      - { name: isHidden, type: boolean, required: true }
+      - { name: childCount, type: integer, description: Children that pass the walk's filters; absent when the directory was not read. }
+    display: { color: "#d9a441", shape: round-rectangle, label: "{name}/" }
+    actions:
+      - name: delete
+        description: Delete this directory and everything under it. Returns the removed Directory node.
+        inputs: { id: string }
+        trigger: manual
+        permissions: [filesystem.write]
+  File:
+    description: A file under the walked root.
+    idRule: "fs:<path relative to root, forward slashes>"
+    properties:
+      - { name: name, type: string, required: true }
+      - { name: extension, type: string, required: true, description: Including the dot; empty when the name has none. }
+      - { name: sizeBytes, type: integer, required: true }
+      - { name: modifiedAt, type: string, required: true, description: UTC stamp ending Z. }
+      - { name: isHidden, type: boolean, required: true }
+    display: { color: "#6c8ebf", shape: rectangle, label: "{name}" }
+    actions:
+      - name: delete
+        description: Delete this file. Returns the removed File node.
+        inputs: { id: string }
+        trigger: manual
+        permissions: [filesystem.write]
+edgeKinds:
+  contains:
+    description: Parent directory to an immediate child.
+    from: [Directory]
+    to: [Directory, File]
+    display: { color: "#999999" }
+findingKinds:
+  unreadable-directory:
+    description: A directory the walk could not list; its children are missing from the layer. The finding carries the path.
+    severity: warning

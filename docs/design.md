@@ -44,3 +44,22 @@ The Smoke task gathers facts (ledger verified, entry kinds of the last run, prob
 then asserts the same facts from the report. The report is the durable, diffable record of a run; the Pester
 result is the pass/fail record in a format CI already understands. Keeping Docker work out of Pester means the
 tests are fast and can be re-run against a saved report.
+
+## 6. A tool policy baked at build, enforced by hooks, decided in the ledger
+
+What the agent may do with its tools is a file, not a prompt: `/opt/agent/policy/policy.json`, generated in the
+image build by Claude.Agent.Policy's `New-Policy` from the vendored Graph.Emitter.FileSystem ontology (plus the
+module's own tool ontology) and checked by `Test-Policy` before the layer is committed. A policy that does not
+validate fails the image build. The policy, the hooks and the settings fragment are root-owned and read-only,
+so the agent (uid 10001) can run the hooks but cannot change them or what they enforce.
+
+The ontology is vendored, not read from `../Graph.Emitter.FileSystem`, so the image does not depend on a fourth
+checkout and a change to the emitter's actions reaches the agent only when someone recopies it here (Modules
+warns when they differ).
+
+The hooks go into `~/.claude/settings.json` at container start (Claude.Agent.Policy design 6 for why not
+managed settings yet). Smoke runs a prompt that reads, writes under `/work` and deletes, and requires the
+ledger to hold allow, allow, deny in that order and the file to survive, checked by `docker cp` from the
+stopped container rather than by anything the agent reported. Which tool claude uses to delete is left to it,
+and nothing in the prompt or the deny message tells it not to try again, so `policy.afterDeny` in the report
+records whether it honoured the deny.

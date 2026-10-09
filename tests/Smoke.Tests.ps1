@@ -83,10 +83,10 @@ Describe 'Smoke report' {
             $report.ledger.outcome.status | Should -Match '^[1-5]\d\d$'
         }
 
-        It 'claude -p exited 0, replied ok, and recorded the auth it used' -Skip:(-not $hasAuth) {
+        It 'claude -p exited 0, ended its reply with ok, and recorded the auth it used' -Skip:(-not $hasAuth) {
             $report.ledger.outcome.auth | Should -Be $report.run.auth
             $report.ledger.outcome.exitCode | Should -Be 0
-            $report.ledger.outcome.output | Should -Match '\bok\b'
+            @(($report.ledger.outcome.output -split "`n") | Where-Object { $_.Trim() })[-1] | Should -Match '^\W*ok\W*$'
         }
     }
 
@@ -114,6 +114,44 @@ Describe 'Smoke report' {
         It 'refused and recorded Claude Code telemetry to Datadog' -Skip:(-not $hasAuth) {
             $report.capture.refusedHosts | Should -Contain 'http-intake.logs.us5.datadoghq.com'
             @($report.capture.refused | Where-Object host -eq 'http-intake.logs.us5.datadoghq.com').status | Should -Contain 403
+        }
+    }
+
+    Context 'policy' {
+        It 'baked a deny-by-default policy from the FileSystem ontology and the tool map' {
+            $report.policy.default | Should -Be 'deny'
+            $rules = @($report.policy.rules | ForEach-Object { "$($_.kind).$($_.action)=$($_.effect)" })
+            $rules | Should -Contain 'File.delete=deny'
+            $rules | Should -Contain 'Directory.delete=deny'
+            $rules | Should -Contain 'File.read=allow'
+            $rules | Should -Contain 'Shell.exec=witness'
+            @(($report.policy.rules | Where-Object { $_.kind -eq 'File' -and $_.action -eq 'write' }).paths) | Should -Be @('/work/**')
+        }
+
+        It 'baked policy.json and the hooks root-owned and read-only' {
+            $paths = @($report.policy.files.path)
+            foreach ($p in '/opt/agent/policy/policy.json', '/opt/agent/policy/settings.json', '/opt/agent/policy/hooks/pre-tool-use.ps1', '/opt/agent/policy/hooks/post-tool-use.ps1') {
+                $paths | Should -Contain $p
+            }
+            @($report.policy.files | Where-Object { $_.owner -ne 'root:root' -or $_.writable }) | Should -HaveCount 0
+        }
+
+        It 'ledgered allow File.read, allow File.write, deny File.delete in that order' -Skip:(-not $hasAuth) {
+            $report.policy.sequenceMatched | Should -BeTrue -Because ($report.policy.preSequence -join ' | ')
+            # Calls after the deny (a retry another way, if any) are listed; the list itself must be there.
+            $report.policy.afterDeny -is [array] | Should -BeTrue
+            $kinds = @($report.policy.decisions | Where-Object phase -eq 'pre' | ForEach-Object kind)
+            $kinds | Should -Contain 'policy.allow'
+            $kinds | Should -Contain 'policy.deny'
+        }
+
+        It 'kept the file the denied delete targeted' -Skip:(-not $hasAuth) {
+            $report.policy.smokeFileExists | Should -BeTrue
+        }
+
+        It 'every pre decision names a rule, and nothing denied ran' -Skip:(-not $hasAuth) {
+            foreach ($d in $report.policy.decisions) { $d.rule | Should -Match '^(rules\[\d+\]|default)$' }
+            @($report.policy.decisions | Where-Object { $_.phase -eq 'post' -and $_.kind -eq 'policy.deny' }) | Should -HaveCount 0
         }
     }
 }

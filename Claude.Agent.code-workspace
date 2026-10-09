@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../Claude.Agent.Ledger"
+		},
+		{
+			"path": "../Claude.Agent.Network"
+		}
+	],
+	"settings": {}
+}

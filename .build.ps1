@@ -3,7 +3,7 @@
 End-to-end build for Claude.Agent (Invoke-Build).
 .DESCRIPTION
 Default chain: Modules, Image, Up, Smoke, Down, Pester.
-Assumes the sibling repos Claude.Agent.Ledger and Claude.Agent.Network sit next to this one.
+Assumes the sibling repos Claude.Agent.Ledger, Claude.Agent.Network and Claude.Agent.Policy sit next to this one.
 #>
 param(
     [string] $Project = 'claude-agent-dev',
@@ -12,9 +12,13 @@ param(
 )
 
 $SiblingRoot = Split-Path -Parent $BuildRoot
-$Siblings = 'Claude.Agent.Ledger', 'Claude.Agent.Network'
+$Siblings = 'Claude.Agent.Ledger', 'Claude.Agent.Network', 'Claude.Agent.Policy'
 $ModulesDir = Join-Path $BuildRoot 'build/modules'
+$PolicyDir = Join-Path $BuildRoot 'build/policy'
 $Artifacts = Join-Path $BuildRoot 'artifacts'
+$VendoredOntology = Join-Path $BuildRoot 'vendor/Graph.Emitter.FileSystem/ontology.yaml'
+# The prompt in entrypoint.ps1 writes this file and then tries to delete it; the policy must keep it.
+$PolicySmokeFile = '/work/policy-smoke.txt'
 
 # True when Compose will hand the agent a non-empty $Name: from the shell environment, else from .env
 # (the same precedence as Compose interpolation). Only presence is checked; no value is printed, stored or written.
@@ -45,15 +49,30 @@ function Get-ServiceContainer([string] $Service) {
     $id
 }
 
-# Synopsis: Copy each sibling's src/<Module> into build/modules (the image build context).
+# Synopsis: Copy each sibling's src/<Module> into build/modules, and the policy hooks into build/policy (the image build context).
 task Modules {
-    remove $ModulesDir
+    remove $ModulesDir, $PolicyDir
     New-Item -ItemType Directory -Path $ModulesDir -Force | Out-Null
     foreach ($name in $Siblings) {
         $src = Join-Path $SiblingRoot "$name/src/$name"
         assert (Test-Path (Join-Path $src "$name.psd1")) "Sibling module missing: $src. Clone $name next to Claude.Agent."
         Copy-Item -Path $src -Destination $ModulesDir -Recurse
         print Green "copied $name"
+    }
+
+    # Policy: the schema goes inside the module (Test-Policy looks there); hooks and the settings fragment are
+    # baked at /opt/agent/policy by the Dockerfile, which also generates policy.json.
+    $policyRepo = Join-Path $SiblingRoot 'Claude.Agent.Policy'
+    Copy-Item -Path (Join-Path $policyRepo 'schemas') -Destination (Join-Path $ModulesDir 'Claude.Agent.Policy') -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $PolicyDir 'hooks') -Force | Out-Null
+    Copy-Item -Path (Join-Path $policyRepo 'hooks/*.ps1') -Destination (Join-Path $PolicyDir 'hooks')
+    Copy-Item -Path (Join-Path $policyRepo 'hooks/settings.json') -Destination $PolicyDir
+    print Green 'copied Claude.Agent.Policy hooks and schema'
+
+    # The image builds from the vendored ontology; say so when the emitter's copy has moved on.
+    $upstream = Join-Path $SiblingRoot 'Graph.Emitter.FileSystem/ontology.yaml'
+    if ((Test-Path $upstream) -and ((Get-FileHash $upstream).Hash -ne (Get-FileHash $VendoredOntology).Hash)) {
+        print Yellow "vendor/Graph.Emitter.FileSystem/ontology.yaml differs from $upstream; recopy it if the change is wanted"
     }
 }
 
@@ -140,6 +159,36 @@ task Smoke {
     $anthropic = @($flows | Where-Object host -eq 'api.anthropic.com')
     $datadogIntake = 'http-intake.logs.us5.datadoghq.com'
 
+    # Policy: what the image baked, who owns it, and what the hooks decided in the last run.
+    $policy = (exec { docker run --rm --network none --entrypoint cat $ImageName /opt/agent/policy/policy.json }) -join "`n" | ConvertFrom-Json
+    $policyFiles = @(exec { docker run --rm --network none --entrypoint find $ImageName /opt/agent/policy -printf '%u:%g %m %p\n' } |
+        Where-Object { $_ } | ForEach-Object {
+            $owner, $mode, $path = $_ -split ' ', 3
+            [ordered]@{ path = $path; owner = $owner; mode = $mode; writable = ([Convert]::ToInt32($mode, 8) -band 0x92) -ne 0 }
+        })
+    $decisions = @($lastRun | Where-Object { $_.kind -like 'policy.*' } | ForEach-Object {
+        [ordered]@{
+            kind = $_.kind; phase = $_.body.phase; tool = $_.body.tool; kindAction = $_.body.kindAction
+            path = $_.body.path; rule = $_.body.rule; command = $_.body.command
+        }
+    })
+    $pre = @($decisions | Where-Object phase -eq 'pre')
+    # The prompt's three steps must show up, in order, among the pre-call decisions.
+    $expected = @(@('policy.allow', 'File.read'), @('policy.allow', 'File.write'), @('policy.deny', 'File.delete'))
+    $matched = 0
+    $denyAt = -1
+    for ($i = 0; $i -lt $pre.Count -and $matched -lt 3; $i++) {
+        if ($pre[$i].kind -eq $expected[$matched][0] -and $pre[$i].kindAction -eq $expected[$matched][1]) {
+            if ($matched -eq 2) { $denyAt = $i }
+            $matched++
+        }
+    }
+    $afterDeny = @(if ($denyAt -ge 0) { $pre | Select-Object -Skip ($denyAt + 1) })
+    # Independent of anything the agent recorded: copy the file out of the stopped container.
+    $smokeCopy = Join-Path $Artifacts 'policy-smoke.txt'
+    & docker cp "${agentId}:$PolicySmokeFile" $smokeCopy 2>$null | Out-Null
+    $smokeFileExists = $LASTEXITCODE -eq 0
+
     $imageSize = [long](exec { docker image inspect $ImageName --format '{{.Size}}' })
 
     $report = [ordered]@{
@@ -147,7 +196,7 @@ task Smoke {
         run       = [ordered]@{
             auth = $auth
             path = if ($auth) { 'run' } else { 'probe' }
-            note = if ($auth) { "credential present (auth: $auth): claude -p must exit 0 and reply ok" }
+            note = if ($auth) { "credential present (auth: $auth): claude -p must exit 0, end its reply with ok, and leave the policy decisions in the ledger" }
                    else { 'no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env or the environment: curl probe only; the claude -p assertion is skipped' }
         }
         image     = [ordered]@{ name = $ImageName; sizeBytes = $imageSize; sizeMB = [math]::Round($imageSize / 1MB, 1) }
@@ -187,6 +236,18 @@ task Smoke {
             refused        = @($flows | Where-Object refused | Select-Object method, host, path, status, started)
             anthropic      = @($anthropic | Select-Object method, host, path, status, requestBytes, responseBytes, started, refused)
         }
+        policy    = [ordered]@{
+            generated       = $policy.generated
+            default         = $policy.default
+            rules           = @($policy.rules)
+            files           = $policyFiles
+            decisions       = $decisions
+            preSequence     = @($pre | ForEach-Object { "$($_.kind) $($_.kindAction)" })
+            sequenceMatched = $matched -eq 3
+            afterDeny       = @($afterDeny)
+            smokeFile       = $PolicySmokeFile
+            smokeFileExists = $smokeFileExists
+        }
     }
     $reportPath = Join-Path $Artifacts 'smoke-report.json'
     $report | ConvertTo-Json -Depth 8 | Set-Content -Path $reportPath -Encoding utf8NoBOM
@@ -208,7 +269,9 @@ task Smoke {
         assert ($outcome.kind -eq 'agent.run') "a credential is present (auth: $auth) but the last run was $($outcome.kind)"
         assert ($outcome.body.auth -eq $auth) "agent.run recorded auth '$($outcome.body.auth)', expected '$auth'"
         assert ($outcome.body.exitCode -eq 0) "claude -p exited $($outcome.body.exitCode): $($outcome.body.output)"
-        assert ($outcome.body.output -match '\bok\b') "claude -p did not reply ok: $($outcome.body.output)"
+        # The last line, not anywhere: a reply saying it is "not replying ok" must fail.
+        $lastLine = @(($outcome.body.output -split "`n") | Where-Object { $_.Trim() })[-1]
+        assert ($lastLine -match '^\W*ok\W*$') "claude -p did not end its reply with ok: $($outcome.body.output)"
     }
     else {
         assert ($outcome.kind -eq 'agent.probe') "no credential is present but the last run was $($outcome.kind)"
@@ -219,6 +282,16 @@ task Smoke {
     if ($auth) {
         # Claude Code's telemetry; the probe path runs only curl, so there is nothing to refuse there.
         assert ($report.capture.refusedHosts -contains $datadogIntake) "$datadogIntake not among refused hosts: $($report.capture.refusedHosts -join ', ')"
+    }
+    # Policy (Claude.Agent.Policy): baked root-owned and read-only; on a claude -p run, read and write allowed, delete denied.
+    assert (@($policy.rules).Count -gt 0) 'the baked policy has no rules'
+    $loose = @($policyFiles | Where-Object { $_.owner -ne 'root:root' -or $_.writable })
+    assert ($loose.Count -eq 0) "policy files not root-owned read-only: $(($loose | ForEach-Object { "$($_.path) $($_.owner) $($_.mode)" }) -join '; ')"
+    if ($auth) {
+        assert ($matched -eq 3) "policy decisions do not hold allow File.read, allow File.write, deny File.delete in order: $($report.policy.preSequence -join ' | ')"
+        assert $smokeFileExists "$PolicySmokeFile is gone: the denied delete happened anyway"
+        $ranDenied = @($decisions | Where-Object { $_.phase -eq 'post' -and $_.kind -eq 'policy.deny' })
+        assert ($ranDenied.Count -eq 0) "a call the policy denies ran: $(($ranDenied | ForEach-Object { "$($_.tool) $($_.kindAction) $($_.path)" }) -join '; ')"
     }
 }
 

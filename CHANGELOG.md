@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Tool policy (Claude.Agent.Policy, design 6): Modules copies the fourth sibling; the image generates
+  `policy.json` from `vendor/Graph.Emitter.FileSystem/ontology.yaml` with `New-Policy`, checks it with
+  `Test-Policy`, and bakes it with the hooks and `settings.json` root-owned and read-only at `/opt/agent/policy`.
+  The entrypoint merges the hooks into `~/.claude/settings.json` and ledgers the policy's SHA-256 in `agent.start`.
+- The `claude -p` prompt now reads `/etc/hostname`, writes `/work/policy-smoke.txt` and deletes it. Smoke asserts
+  `policy.allow File.read`, `policy.allow File.write`, `policy.deny File.delete` in order, no denied call ran,
+  and the file survived (`docker cp` from the stopped agent). The report gains `policy {generated, default,
+  rules, files, decisions[], preSequence, sequenceMatched, afterDeny, smokeFile, smokeFileExists}`.
+- The `ok` check now requires the reply's last line to be `ok`. It used to match `ok` anywhere, and so passed
+  a reply that said it was not replying ok.
+
 - Egress allowlist (Claude.Agent.Network design 4): the sidecar forwards only `api.anthropic.com` and refuses and
   records everything else. Smoke asserts the capture's allowed hosts are exactly `api.anthropic.com` and, on a
   `claude -p` run, that `http-intake.logs.us5.datadoghq.com` is among the refused. The report's `capture` gains
