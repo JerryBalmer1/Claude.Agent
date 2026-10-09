@@ -55,6 +55,18 @@ generates its policy from it. Modules prints a warning when the emitter's own co
 
 Docker Desktop (Compose v2.24+), PowerShell 7.4+, `InvokeBuild`, `Pester` 5.5+.
 
+## Project name and host port
+
+| Setting | Default | What |
+| --- | --- | --- |
+| `COMPOSE_PROJECT_NAME` | `claude-agent-dev` | Compose project; names the containers, networks (`<project>_inside`, ...) and volumes (`<project>_ledger`, ...) |
+| `CLAUDE_AGENT_PORT` | `8300` | Host port reserved for an Alerts/Ledger API; published by nothing yet (commented `ports:` on the keeper) |
+
+`.build.ps1` takes each from `-Project` / `-Port`, else `.env`, else the environment, else the default
+(`.env.example`), exports both and passes `--project-name` on every `docker compose` call (design 9). No service
+publishes a host port: Smoke fails on any port but the reserved one, and `Invoke-Build Status` prints the
+project, the networks and volumes it owns, and fails if any host port is published.
+
 ## Build order
 
 `Invoke-Build` in this repo runs, in order:
@@ -62,12 +74,13 @@ Docker Desktop (Compose v2.24+), PowerShell 7.4+, `InvokeBuild`, `Pester` 5.5+.
 1. **Modules**: copy `src/<Module>` of `../Claude.Agent.Ledger`, `../Claude.Agent.Network` and `../Claude.Agent.Policy` into `build/modules/` (fails if a sibling is missing); copy Policy's `schemas/` into its module, and its `hooks/*.ps1` and `hooks/settings.json` into `build/policy/`. Copy `../Claude.Agent.Alerts/src/Claude.Agent.Alerts` and `../Graph.Node/src/GraphNode` into `build/host-modules/`, which no image gets (design 7).
 2. **Image**: `docker compose build agent ledger`: the agent (node:22-bookworm-slim, PowerShell 7.4, Claude Code 2.1.295, the three modules) and the keeper (PowerShell 7.4, the ledger module only). The agent build runs `New-Policy` and `Test-Policy` against the vendored ontology and bakes `policy.json`, the hooks, `settings.json` and the ontology at `/opt/agent/policy`, owned by root, directories `0555`, files `0444`.
 3. **Up**: `docker compose up -d`; `mitm` and `ledger` must be healthy before `agent` (`ledger` is healthy once its start-up seq sync has written `/spool/seq`, design 8); wait for `agent` to exit 0. Prints which run path (run or probe) it took.
-4. **Smoke**: stop `agent`; poll until the keeper has drained `/spool/pending.jsonl` (30 s cap); stop `ledger` (it flushes on SIGTERM; must exit 0) and `mitm` (flushes the capture); copy the ledger volume out with a one-shot container, `Test-Ledger`; check that the agent image has no `key.bin`, the agent container has no `/ledger` mount and sits on `inside` only, and that `inside` is internal with only `agent` and `mitm` on it; convert and read the capture; read the baked policy and its file owners and modes from the image, take the `policy.*` entries from the ledger, and `docker cp` `/work/policy-smoke.txt` out of the stopped agent; write `artifacts/smoke-report.json`, and fail if any fact is missing.
-5. **Alerts**: run `Invoke-LedgerAlert` on `artifacts/ledger/ledger.jsonl` from the last `agent.egress-check` on, write `artifacts/alerts/<yyyyMMddTHHmmssZ>.graph.json` (plus `ontology.yaml`) with `Export-LedgerAlert`, check it with `Test-Graph -Strict`, and add `alerts {fromSeq, total, bySeverity, byRule, errors[], findings[], envelope {path, valid, nodes, edges}}` to the report. On a `claude -p` run there must be exactly one error, the smoke delete's `policy.deny`; on a probe run, none.
+4. **Smoke**: stop `agent`; poll until the keeper has drained `/spool/pending.jsonl` (30 s cap); stop `ledger` (it flushes on SIGTERM; must exit 0) and `mitm` (flushes the capture); copy the ledger volume out with a one-shot container, `Test-Ledger`; check that the agent image has no `key.bin`, the agent container has no `/ledger` mount and sits on `inside` only, and that `inside` is internal with only `agent` and `mitm` on it; convert and read the capture; read the baked policy and its file owners and modes from the image, take the `policy.*` entries from the ledger, and `docker cp` `/work/policy-smoke.txt` out of the stopped agent; check that no host port but `CLAUDE_AGENT_PORT` is published (config and containers); write `artifacts/smoke-report.json`, and fail if any fact is missing.
+5. **Alerts**: run `Invoke-LedgerAlert` on `artifacts/ledger/ledger.jsonl` from the last `agent.egress-check` on, write `artifacts/alerts/<yyyyMMddTHHmmssZ>.graph.json` (the layer stamp; plus `ontology.yaml`) with `Export-LedgerAlert`, copy the newest to `artifacts/alerts/latest.graph.json` for the portal, check them with `Test-Graph -Strict` and with Graph.Node's `graphnode validate --ontology` against Claude.Agent.Alerts' shipped `ontology.yaml` (must print `[]`), and add `alerts {fromSeq, total, bySeverity, byRule, errors[], findings[], envelope {path, valid, nodes, edges, latest, latestIsNewest, ontology, validate[]}}` to the report. On a `claude -p` run there must be exactly one error, the smoke delete's `policy.deny`; on a probe run, none.
 6. **Down**: `docker compose down` (volumes kept).
 7. **Pester**: `tests/Smoke.Tests.ps1` asserts the report.
 
 `Invoke-Build Clean` also removes the volumes (spool, ledger, CA, capture) and `build/`, `artifacts/`.
+`Invoke-Build Status` is not in the chain: project name, its networks and volumes, and the host-port check.
 Each sibling has its own `Invoke-Build` for its unit tests.
 
 ## Running with and without a credential
@@ -106,6 +119,6 @@ The report's `policy` block holds `rules`, `files` (owner, mode), `decisions[]`,
 | Capture | volume `claude-agent-dev_capture` (`flows.mitm`), never mounted into the agent |
 | Policy | `/opt/agent/policy` in the agent image: `policy.json`, `settings.json`, `hooks/`, `ontology/`; root-owned, read-only |
 | Copies for the host | `artifacts/ledger/ledger.jsonl`, `artifacts/capture.json`, `artifacts/smoke-report.json` (gitignored; the key is deleted after verification) |
-| Alerts layer | `artifacts/alerts/<yyyyMMddTHHmmssZ>.graph.json` and `ontology.yaml` (GraphNode `graph/1`, module `Claude.Agent.Alerts`) |
+| Alerts layer | `artifacts/alerts/<yyyyMMddTHHmmssZ>.graph.json`, `artifacts/alerts/latest.graph.json` (copy of the newest, for the portal) and `ontology.yaml` (GraphNode `graph/1`, module `Claude.Agent.Alerts`) |
 
 See [docs/design.md](docs/design.md) for why it is built this way.

@@ -30,8 +30,24 @@ Describe 'Smoke report' {
 
         It 'the agent is on the internal network only, shared with mitm and nothing else' {
             $report.egress.insideInternal | Should -BeTrue
-            @($report.egress.agentNetworks) | Should -Be @('claude-agent-dev_inside')
+            @($report.egress.agentNetworks) | Should -Be @("$($report.project)_inside")
             @($report.egress.insideServices) | Should -Be @('agent', 'mitm')
+        }
+    }
+
+    Context 'project and host ports' {
+        It 'names the compose project the build drove' {
+            $report.project | Should -Match '^[a-z0-9][a-z0-9_-]*$'
+        }
+
+        It 'reserves a host port and publishes no other' {
+            $report.ports.reserved | Should -BeGreaterThan 0
+            @($report.ports.stray) | Should -HaveCount 0
+            foreach ($p in @($report.ports.published)) { $p.hostPort | Should -Be "$($report.ports.reserved)" }
+        }
+
+        It 'publishes nothing yet, not even the reserved port' {
+            @($report.ports.published) | Should -HaveCount 0
         }
     }
 
@@ -164,6 +180,25 @@ Describe 'Smoke report' {
             $report.alerts.envelope.path | Should -Match '^artifacts/alerts/\d{8}T\d{6}Z\.graph\.json$'
             Join-Path $PSScriptRoot '..' $report.alerts.envelope.path | Should -Exist
             $report.alerts.envelope.valid | Should -BeTrue
+        }
+
+        It 'keeps artifacts/alerts/latest.graph.json a copy of the newest layer, for the portal' {
+            $report.alerts.envelope.latest | Should -Be 'artifacts/alerts/latest.graph.json'
+            $latest = Join-Path $PSScriptRoot '..' $report.alerts.envelope.latest
+            $latest | Should -Exist
+            $report.alerts.envelope.latestIsNewest | Should -BeTrue
+            $stamped = Get-ChildItem (Split-Path $latest) -Filter '*.graph.json' | Where-Object Name -ne 'latest.graph.json' | Sort-Object Name | Select-Object -Last 1
+            (Get-FileHash $latest).Hash | Should -Be (Get-FileHash $stamped.FullName).Hash
+            (Get-Content $latest -Raw | ConvertFrom-Json).layer.ToUniversalTime().ToString('yyyyMMdd''T''HHmmss''Z''') + '.graph.json' | Should -Be $stamped.Name
+        }
+
+        It 'both files pass graphnode validate --ontology with the ontology Claude.Agent.Alerts ships: []' {
+            $report.alerts.envelope.ontology | Should -Be 'build/host-modules/Claude.Agent.Alerts/ontology.yaml'
+            @($report.alerts.envelope.validate) | Should -HaveCount 2
+            foreach ($v in $report.alerts.envelope.validate) {
+                $v.exitCode | Should -Be 0 -Because $v.path
+                ($v.output -replace '\s', '') | Should -Be '[]' -Because $v.path
+            }
         }
 
         It 'has a summary that matches its findings' {

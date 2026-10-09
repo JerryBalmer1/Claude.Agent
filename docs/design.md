@@ -99,3 +99,25 @@ on both sides.
 
 Not covered: a `seq` file that is present but lower than the ledger (edited by hand). The keeper still raises
 it on start, but the healthcheck does not wait for that. Nothing in this repo writes one.
+
+## 9. One reserved host port, published by nothing yet; one project name, passed every time
+
+Nothing in this stack needs to be reached from the host: the agent talks out through `mitm`, the keeper has no
+network, and the host reads volumes by copying them out. So no service publishes a host port. One is reserved,
+`CLAUDE_AGENT_PORT` (8300), for an Alerts/Ledger API when one exists, so the portal and the docs can name it now
+and nothing else claims it later. `compose.yaml` carries it as a commented `ports:` line on the keeper, bound to
+127.0.0.1; switching it on also means giving the keeper a network, which reopens design 3 and is a decision of
+its own. Smoke fails if any host port other than the reserved one is published, looking both at the resolved
+compose config (`ports`, or `network_mode: host`) and at the port bindings of the project's containers, running
+or stopped. Status is stricter and fails if any host port is published at all, the reserved one included,
+because nothing is meant to publish it yet.
+
+The project name, `COMPOSE_PROJECT_NAME` (default `claude-agent-dev`), decides the container, network and volume
+names the build inspects (`<project>_inside`, `<project>_ledger`, ...). If the build and Compose disagreed, the
+build would check one project's volumes while Compose ran another, so `.build.ps1` resolves the name once and
+passes it as `--project-name` on every `docker compose` call, and exports both settings for interpolation.
+
+For these two settings `.env` wins over the environment, then the defaults in `.env.example`. That is the
+opposite of Compose's own order (shell over `.env`), and deliberate: they describe the checkout, so a stray
+shell variable should not quietly move the build to another project. Credentials keep Compose's order
+(Test-CredentialPresent), because there the shell overriding `.env` is the documented way to run without a file.

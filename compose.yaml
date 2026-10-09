@@ -49,6 +49,11 @@ services:
       - spool:/spool
       - ledger:/ledger
     stop_grace_period: 15s
+    # Host port ${CLAUDE_AGENT_PORT} (default 8300) is reserved for an Alerts/Ledger API when one exists; nothing
+    # publishes it yet. Publishing it means giving this service a network instead of network_mode: none (design 9).
+    # No service may publish any other host port; Smoke fails if one does and Status if any is published.
+    # ports:
+    #   - "127.0.0.1:${CLAUDE_AGENT_PORT:-8300}:8300"
     # Healthy once /spool/seq exists: the keeper writes it in its start-up sync when it is missing (lost or new),
     # and it is only ever missing in exactly the case where an early writer would restart seq at 1 (design 8).
     healthcheck:

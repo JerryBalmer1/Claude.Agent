@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.2 - 2026-10-09
+
+- Port: host port `CLAUDE_AGENT_PORT` (default 8300, `.env.example`) is reserved for an Alerts/Ledger API and
+  published by nothing yet; `compose.yaml` carries it as a commented `ports:` line on the keeper. No service may
+  publish any other host port: Smoke fails on one (report `ports {reserved, published[], stray[]}`), and the new
+  Status task fails if any host port is published (design 9).
+- Project name: `COMPOSE_PROJECT_NAME` (default `claude-agent-dev`). `.build.ps1` reads it and the port from `.env`,
+  else the environment, else the defaults (`-Project` / `-Port` override), exports both, and passes
+  `--project-name` on every `docker compose` call. The report records `project`. New Status task: project name,
+  the networks and volumes it owns, and the host-port check.
+- Alerts artifact path: the layer stays at `artifacts/alerts/<layer stamp>.graph.json` (`yyyyMMddTHHmmssZ` of its
+  `layer`), and `artifacts/alerts/latest.graph.json` is a copy of the newest, for the portal. Alerts runs Graph.Node's
+  `graphnode validate --ontology` on both against Claude.Agent.Alerts' shipped `ontology.yaml` and requires `[]`;
+  the report's `alerts.envelope` gains `latest`, `latestIsNewest`, `ontology`, `validate[]`.
+
 ## Unreleased
 
 - Alerts (design 7): Modules copies the fifth sibling, Claude.Agent.Alerts, and Graph.Node's GraphNode into

@@ -2,15 +2,69 @@
 .SYNOPSIS
 End-to-end build for Claude.Agent (Invoke-Build).
 .DESCRIPTION
-Default chain: Modules, Image, Up, Smoke, Alerts, Down, Pester.
+Default chain: Modules, Image, Up, Smoke, Alerts, Down, Pester. Status is on its own.
+Project name and reserved port: -Project / -Port, else COMPOSE_PROJECT_NAME / CLAUDE_AGENT_PORT from .env, else
+from the environment, else claude-agent-dev / 8300 (.env.example). Every docker compose call gets both (design 9).
 Assumes the sibling repos Claude.Agent.Ledger, Claude.Agent.Network, Claude.Agent.Policy and Claude.Agent.Alerts,
 and Graph.Node, sit next to this one.
 #>
 param(
-    [string] $Project = 'claude-agent-dev',
+    [string] $Project,
+    [int] $Port,
     [string] $ImageName = 'claude-agent:dev',
     [string] $LedgerImageName = 'claude-agent-ledger:dev'
 )
+
+# A setting from .env if it is there and non-empty, else from the environment, else the default (design 9).
+# Only for the two non-secret settings below; credentials keep Compose's own precedence (Test-CredentialPresent).
+function Get-BuildSetting([string] $Name, [string] $Default) {
+    $envFile = Join-Path $BuildRoot '.env'
+    if (Test-Path -LiteralPath $envFile) {
+        foreach ($line in Get-Content -LiteralPath $envFile) {
+            if ($line -match "^\s*(?:export\s+)?$Name\s*=\s*(.*)$") {
+                $value = $Matches[1].Trim().Trim('"', "'")
+                if ($value) { return $value }
+            }
+        }
+    }
+    $fromEnv = [Environment]::GetEnvironmentVariable($Name)
+    if ($fromEnv) { return $fromEnv }
+    $Default
+}
+
+if (-not $Project) { $Project = Get-BuildSetting COMPOSE_PROJECT_NAME 'claude-agent-dev' }
+if (-not $Port) { $Port = [int](Get-BuildSetting CLAUDE_AGENT_PORT '8300') }
+# Exported for Compose interpolation (${CLAUDE_AGENT_PORT}) and passed as --project-name on every call, so the
+# project the build drives is the one these settings name, whatever the shell or .env says to Compose directly.
+$env:COMPOSE_PROJECT_NAME = $Project
+$env:CLAUDE_AGENT_PORT = "$Port"
+
+function Invoke-Compose {
+    & docker compose --project-name $Project @args
+}
+
+# Every host port the project publishes or would publish, as {service, hostPort, source}: declared in the
+# resolved compose config (ports, or network_mode: host, which publishes everything), and bound on any of the
+# project's containers, running or stopped (an empty HostPort is an ephemeral port, still published).
+function Get-PublishedPort {
+    $config = (exec { Invoke-Compose config --format json }) -join "`n" | ConvertFrom-Json -AsHashtable
+    foreach ($svc in $config.services.GetEnumerator()) {
+        if ($svc.Value['network_mode'] -eq 'host') { [ordered]@{ service = $svc.Key; hostPort = 'host-network'; source = 'config' } }
+        foreach ($port in @($svc.Value['ports'])) {
+            if ($port) { [ordered]@{ service = $svc.Key; hostPort = $(if ($port['published']) { [string]$port['published'] } else { 'ephemeral' }); source = 'config' } }
+        }
+    }
+    foreach ($id in @(exec { docker ps -a -q --filter "label=com.docker.compose.project=$Project" } | Where-Object { $_ })) {
+        $service = exec { docker inspect $id --format '{{index .Config.Labels "com.docker.compose.service"}}' }
+        $bindings = (exec { docker inspect $id --format '{{json .HostConfig.PortBindings}}' }) | ConvertFrom-Json -AsHashtable
+        if (-not $bindings) { continue }
+        foreach ($binding in $bindings.GetEnumerator()) {
+            foreach ($hostSide in @($binding.Value)) {
+                [ordered]@{ service = $service; hostPort = $(if ($hostSide['HostPort']) { [string]$hostSide['HostPort'] } else { 'ephemeral' }); source = 'container' }
+            }
+        }
+    }
+}
 
 $SiblingRoot = Split-Path -Parent $BuildRoot
 $Siblings = 'Claude.Agent.Ledger', 'Claude.Agent.Network', 'Claude.Agent.Policy'
@@ -47,7 +101,7 @@ function Get-AgentAuth {
 }
 
 function Get-ServiceContainer([string] $Service) {
-    $id = exec { docker compose ps -a -q $Service }
+    $id = exec { Invoke-Compose ps -a -q $Service }
     assert $id "$Service container not found"
     $id
 }
@@ -90,7 +144,7 @@ task Modules {
 
 # Synopsis: Build the agent and ledger keeper images.
 task Image {
-    exec { docker compose build agent ledger }
+    exec { Invoke-Compose build agent ledger }
 }
 
 # Synopsis: Start mitm, ledger and agent, wait for the agent to exit, require exit 0.
@@ -98,10 +152,10 @@ task Up {
     $auth = Get-AgentAuth
     $path = if ($auth) { "run (auth: $auth; claude -p)" } else { 'probe (no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY: curl probe)' }
     print Cyan "run path: $path"
-    exec { docker compose up -d --force-recreate }
+    exec { Invoke-Compose up -d --force-recreate }
     $id = Get-ServiceContainer agent
     $code = exec { docker wait $id }
-    exec { docker compose logs --no-color agent }
+    exec { Invoke-Compose logs --no-color agent }
     assert ($code -eq '0') "agent exited with $code"
 }
 
@@ -116,20 +170,20 @@ task Smoke {
     $keeperId = Get-ServiceContainer ledger
 
     # The agent only spools; wait for the keeper to chain everything, then stop it (SIGTERM flushes once more).
-    exec { docker compose stop agent }
+    exec { Invoke-Compose stop agent }
     $drainClock = [Diagnostics.Stopwatch]::StartNew()
     $drained = $false
     while ($drainClock.Elapsed.TotalSeconds -lt 30) {
-        & docker compose exec -T ledger sh -c 'test ! -s /spool/pending.jsonl' 2>$null
+        Invoke-Compose exec -T ledger sh -c 'test ! -s /spool/pending.jsonl' 2>$null
         if ($LASTEXITCODE -eq 0) { $drained = $true; break }
         Start-Sleep -Milliseconds 500
     }
     $drainSeconds = [math]::Round($drainClock.Elapsed.TotalSeconds, 1)
-    exec { docker compose stop ledger }
+    exec { Invoke-Compose stop ledger }
     $keeperExit = [int](exec { docker inspect $keeperId --format '{{.State.ExitCode}}' })
 
     # mitmdump buffers the stream file; stopping it flushes flows.mitm.
-    exec { docker compose stop mitm }
+    exec { Invoke-Compose stop mitm }
 
     # Ledger: copy the volume out through a container that is created but never started.
     $ledgerDir = Join-Path $Artifacts 'ledger'
@@ -157,10 +211,13 @@ task Smoke {
     $agentNetworks = @((exec { docker inspect $agentId --format '{{json .NetworkSettings.Networks}}' } | ConvertFrom-Json).PSObject.Properties.Name)
     $insideInternal = (exec { docker network inspect "${Project}_inside" --format '{{.Internal}}' }) -eq 'true'
     # -AsHashtable: the agent's environment has both HTTP_PROXY and http_proxy.
-    $config = (exec { docker compose config --format json }) -join "`n" | ConvertFrom-Json -AsHashtable
+    $config = (exec { Invoke-Compose config --format json }) -join "`n" | ConvertFrom-Json -AsHashtable
     $insideServices = @($config.services.GetEnumerator() |
         Where-Object { $_.Value['networks'] -and $_.Value['networks'].Contains('inside') } |
         ForEach-Object Key | Sort-Object)
+    # Host ports (design 9): only the reserved $Port may ever be published, and today nothing publishes it.
+    $published = @(Get-PublishedPort)
+    $strayPorts = @($published | Where-Object { $_.hostPort -ne "$Port" })
 
     # Capture: convert straight off the volume with the sidecar's image.
     $captureJson = Join-Path $Artifacts 'capture.json'
@@ -206,6 +263,8 @@ task Smoke {
 
     $report = [ordered]@{
         generated = [DateTime]::UtcNow.ToString('o')
+        project   = $Project
+        ports     = [ordered]@{ reserved = $Port; published = $published; stray = $strayPorts }
         run       = [ordered]@{
             auth = $auth
             path = if ($auth) { 'run' } else { 'probe' }
@@ -272,6 +331,7 @@ task Smoke {
     assert ($lastRun.kind -contains 'agent.start') 'no agent.start in the ledger'
     assert ($lastRun.kind -contains 'agent.stop') 'last run has no agent.stop'
     assert ($report.egress.directBlocked -eq $true) 'the agent reached api.anthropic.com without the proxy'
+    assert ($strayPorts.Count -eq 0) "host ports other than the reserved $Port are published: $(($strayPorts | ForEach-Object { "$($_.service):$($_.hostPort) ($($_.source))" }) -join ', ')"
     assert $insideInternal "network ${Project}_inside is not internal"
     assert (($agentNetworks -join ',') -eq "${Project}_inside") "agent networks: $($agentNetworks -join ', ')"
     assert (($insideServices -join ',') -eq 'agent,mitm') "services on inside: $($insideServices -join ', ')"
@@ -320,7 +380,24 @@ task Alerts {
     $lastCheck = Get-Content -LiteralPath $ledgerFile | ConvertFrom-Json | Where-Object kind -eq 'agent.egress-check' | Select-Object -Last 1
     $fromSeq = if ($lastCheck) { [long]$lastCheck.seq } else { $null }
     $findings = @(Invoke-LedgerAlert -LedgerPath $ledgerFile -FromSeq $fromSeq)
-    $file = Export-LedgerAlert -Findings $findings -OutDir (Join-Path $Artifacts 'alerts') -LedgerPath $ledgerFile
+    $alertsDir = Join-Path $Artifacts 'alerts'
+    $file = Export-LedgerAlert -Findings $findings -OutDir $alertsDir -LedgerPath $ledgerFile
+    # For the portal: the layer stays under its stamp; latest.graph.json is always a copy of the newest one.
+    $latest = Join-Path $alertsDir 'latest.graph.json'
+    $newest = Get-ChildItem -LiteralPath $alertsDir -Filter '*.graph.json' | Where-Object Name -ne 'latest.graph.json' | Sort-Object Name | Select-Object -Last 1
+    Copy-Item -LiteralPath $newest.FullName -Destination $latest -Force
+    # Graph.Node's own CLI, checked against the ontology Claude.Agent.Alerts ships (as copied by Modules).
+    $graphnode = Join-Path $HostModulesDir ('GraphNode/bin/' + $(if ($IsWindows) { 'win-x64/graphnode.exe' } else { 'linux-x64/graphnode' }))
+    assert (Test-Path -LiteralPath $graphnode) "no graphnode binary at $graphnode; build it in ../Graph.Node (Invoke-Build Build)"
+    $shippedOntology = Join-Path $HostModulesDir 'Claude.Agent.Alerts/ontology.yaml'
+    $validate = foreach ($target in $file.FullName, $latest) {
+        $out = & $graphnode validate $target --ontology $shippedOntology
+        [ordered]@{
+            path     = [System.IO.Path]::GetRelativePath($BuildRoot, $target).Replace('\', '/')
+            exitCode = $LASTEXITCODE
+            output   = (($out -join "`n").Trim())
+        }
+    }
     $check = Test-Graph -Path $file.FullName -Strict
     $graph = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
     $summary = Get-LedgerAlertSummary -Findings $findings
@@ -342,12 +419,20 @@ task Alerts {
             valid = $check.Valid
             nodes = $graph.counts.nodes
             edges = $graph.counts.edges
+            latest       = [System.IO.Path]::GetRelativePath($BuildRoot, $latest).Replace('\', '/')
+            latestIsNewest = (Get-FileHash -LiteralPath $latest).Hash -eq (Get-FileHash -LiteralPath $file.FullName).Hash
+            ontology     = [System.IO.Path]::GetRelativePath($BuildRoot, $shippedOntology).Replace('\', '/')
+            validate     = @($validate)
         }
     }
     $report | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8NoBOM
     print Cyan ($report.alerts | ConvertTo-Json -Depth 6)
 
     assert $check.Valid "alerts envelope is not valid: $(($check.Problems | ForEach-Object { "$($_.Code) $($_.Path): $($_.Message)" }) -join '; ')"
+    assert $report.alerts.envelope.latestIsNewest "latest.graph.json is not the envelope just written"
+    foreach ($v in $validate) {
+        assert ($v.exitCode -eq 0 -and ($v.output -replace '\s', '') -eq '[]') "graphnode validate --ontology $($v.path): exit $($v.exitCode): $($v.output)"
+    }
     if ($report.run.auth) {
         # The smoke prompt's delete is the one thing a clean claude -p run should be refused.
         assert ($errors.Count -eq 1) "expected exactly one error finding (the smoke delete's policy.deny), got $($errors.Count): $(($errors | ForEach-Object { "$($_.id) $($_.detail)" }) -join '; ')"
@@ -358,9 +443,30 @@ task Alerts {
     }
 }
 
+# Synopsis: Print the compose project, the networks and volumes it owns, and confirm no host port is published.
+task Status {
+    print Cyan "compose project: $Project"
+    print Cyan "reserved host port: $Port (CLAUDE_AGENT_PORT; published by nothing yet, design 9)"
+    $config = (exec { Invoke-Compose config --format json }) -join "`n" | ConvertFrom-Json -AsHashtable
+    $owned = @{
+        network = @(exec { docker network ls --filter "label=com.docker.compose.project=$Project" --format '{{.Name}}' } | Where-Object { $_ })
+        volume  = @(exec { docker volume ls --filter "label=com.docker.compose.project=$Project" --format '{{.Name}}' } | Where-Object { $_ })
+    }
+    foreach ($kind in 'network', 'volume') {
+        $declared = @($config["${kind}s"].GetEnumerator() | ForEach-Object { if ($_.Value['name']) { $_.Value['name'] } else { "${Project}_$($_.Key)" } } | Sort-Object)
+        print Cyan "${kind}s:"
+        foreach ($name in $declared) { print Cyan ("  {0,-32} {1}" -f $name, $(if ($owned[$kind] -contains $name) { 'exists' } else { 'not created' })) }
+        foreach ($extra in @($owned[$kind] | Where-Object { $_ -notin $declared })) { print Yellow ("  {0,-32} exists, no longer declared" -f $extra) }
+    }
+    $published = @(Get-PublishedPort)
+    if ($published.Count -eq 0) { print Green 'host ports: none published' }
+    else { foreach ($pp in $published) { print Red "host port published: $($pp.service):$($pp.hostPort) ($($pp.source))" } }
+    assert ($published.Count -eq 0) "host ports are published: $(($published | ForEach-Object { "$($_.service):$($_.hostPort)" }) -join ', ')"
+}
+
 # Synopsis: Stop and remove containers; volumes are kept.
 task Down {
-    exec { docker compose down }
+    exec { Invoke-Compose down }
 }
 
 # Synopsis: Assert the smoke report with Pester (the record of the run).
@@ -370,7 +476,7 @@ task Pester {
 
 # Synopsis: Remove containers, volumes (spool, ledger, CA, capture), build/ and artifacts/.
 task Clean {
-    exec { docker compose down --volumes }
+    exec { Invoke-Compose down --volumes }
     remove $ModulesDir, $PolicyDir, $HostModulesDir, $Artifacts
 }
 
