@@ -46,12 +46,8 @@ $env:NODE_EXTRA_CA_CERTS = $caPath
 
 Import-Module Claude.Agent.Ledger
 
-# Claude.Agent.Ledger 0.2.4's Add-LedgerEntry spools the line, then returns it through ConvertFrom-Json without
-# -AsHashtable, which throws on the snapshot's env: this container has HTTP_PROXY and http_proxy. The line is
-# spooled by then, so that one error is dropped; any other still stops the script.
 function Add-SnapshotEntry([string] $At) {
-    try { Add-LedgerEntry -Spool $spool -Kind 'agent.snapshot' -Body (Get-AgentSnapshot -At $At) -ErrorAction Stop | Out-Null }
-    catch { if ($_.FullyQualifiedErrorId -notlike 'KeysWithDifferentCasingInJsonString,*') { throw } }
+    Add-LedgerEntry -Spool $spool -Kind 'agent.snapshot' -Body (Get-AgentSnapshot -At $At) | Out-Null
 }
 
 # The proxy env is a convenience. The control is the internal network: going direct must fail.

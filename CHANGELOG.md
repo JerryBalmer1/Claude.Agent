@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.7 - 2026-10-09
+
+- Ledger 0.2.5 parses with `-AsHashtable`, so the 0.4.5 workaround is gone: the entrypoint's `Add-SnapshotEntry`
+  no longer drops `KeysWithDifferentCasingInJsonString`; any error from `Add-LedgerEntry` stops the script.
+  Smoke still reads `ledger.jsonl` itself, now only for `-DateKind String`.
+- `vendor/Graph.Emitter.FileSystem/ontology.yaml` recopied at 0.1.2 (action `inputs` as a typed list, `returns`,
+  new display). Needs Claude.Agent.Policy 0.1.2, whose reader no longer takes those `inputs` items for actions.
+  The generated rules are unchanged. The image bakes Ledger 0.2.5, Policy 0.1.2; host-side Alerts 0.1.3.
+
+## 0.4.6 - 2026-10-09
+
+- Up posts the artifacts\layers folder to /api/layers so Portal remounts the newest run on boot.
+
 ## 0.4.5 - 2026-10-09
 
 - 0.4.5: Up exports the run to 8200; policy.json to host; snapshot entries; Up replaces

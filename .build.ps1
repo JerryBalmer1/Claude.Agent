@@ -314,8 +314,8 @@ task Smoke {
     Remove-Item (Join-Path $ledgerDir 'key.bin') -Force
 
     # A run begins with its egress check; take everything from the last one on.
-    # Not Get-Ledger: Claude.Agent.Ledger 0.2.4 parses each line without -AsHashtable, which throws on an
-    # agent.snapshot env holding HTTP_PROXY and http_proxy. Hashtables answer .kind and .body the same way.
+    # Not Get-Ledger: -DateKind String keeps each stamp the writer's string, which the ledger module (PowerShell 7.4)
+    # cannot ask for. -AsHashtable: an agent.snapshot env holds HTTP_PROXY and http_proxy.
     $entries = @(Get-Content -LiteralPath (Join-Path $ledgerDir 'ledger.jsonl') | ConvertFrom-Json -AsHashtable -DateKind String)
     $lastCheck = [array]::FindLastIndex([object[]]$entries, [Predicate[object]] { param($e) $e.kind -eq 'agent.egress-check' })
     $lastRun = if ($lastCheck -ge 0) { @($entries[$lastCheck..($entries.Count - 1)]) } else { @() }
